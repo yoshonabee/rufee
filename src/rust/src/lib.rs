@@ -1,5 +1,5 @@
-use pyo3::types::{PyDict, PyList, PyTuple};
-use pyo3::{prelude::*, AsPyPointer};
+use pyo3::prelude::*;
+use pyo3::types::PyList;
 
 // use std::collections::HashMap;
 use std::vec::Vec;
@@ -94,6 +94,7 @@ struct Context {
     // state: State,
     #[pyo3(get, set)]
     state: PyObject, // TODO implement as native rust type
+    _proxy: PyObject, // ContextProxy obj in python
 }
 
 unsafe impl Send for Context {} // TDOO fix unsafe
@@ -101,7 +102,11 @@ unsafe impl Send for Context {} // TDOO fix unsafe
 #[pymethods]
 impl Context {
     #[new]
-    fn new(state: &Bound<'_, PyAny>, values: &Bound<'_, PyList>) -> Self {
+    fn new(
+        state: &Bound<'_, PyAny>,
+        values: &Bound<'_, PyList>,
+        context_proxy: &Bound<'_, PyAny>,
+    ) -> Self {
         Context {
             // stack: Vec::new(),
             _sql: Vec::new(),
@@ -110,6 +115,7 @@ impl Context {
             // alias_manager: AliasManager::new(),
             // state: State::new(settings),
             state: state.clone().unbind(),
+            _proxy: context_proxy.clone().unbind(),
         }
     }
 
@@ -122,7 +128,11 @@ impl Context {
         Ok((self._sql.join(""), self._values.clone_ref(py)))
     }
 
-    fn __sql__<'py>(&self, mut ctx: PyRefMut<'py, Self>, py: Python) -> PyResult<PyRefMut<'py, Self>> {
+    fn __sql__<'py>(
+        &self,
+        mut ctx: PyRefMut<'py, Self>,
+        py: Python,
+    ) -> PyResult<PyRefMut<'py, Self>> {
         // extend sql
         ctx._sql.extend(self._sql.clone());
 
@@ -138,20 +148,43 @@ impl Context {
         func.call1(py, (value,))?;
         Ok(())
     }
-}
 
-fn print_var_type<T>(_: &T) {
-    println!("T is {:?}", std::any::type_name::<T>());
-}
+    #[getter]
+    fn get_scope(&self, py: Python) -> PyResult<i32> {
+        let scope = self.state.getattr(py, "scope")?.extract(py)?;
+        Ok(scope)
+    }
 
-#[pyfunction]
-fn call_python_func<'py>(
-    func: &Bound<'py, PyAny>,
-    args: &Bound<'py, PyTuple>,
-    kwargs: &Bound<'py, PyDict>,
-) -> PyResult<Bound<'py, PyAny>> {
-    print_var_type(&func);
-    func.call(args, Some(kwargs))
+    #[getter]
+    fn get_parentheses(&self, py: Python) -> PyResult<PyObject> {
+        let parentheses = self.state.getattr(py, "parentheses")?;
+        Ok(parentheses)
+    }
+
+    #[getter]
+    fn get_subquery(&self, py: Python) -> PyResult<PyObject> {
+        let subquery = self.state.getattr(py, "subquery")?;
+        Ok(subquery)
+    }
+
+    /*
+
+    def parse(self, node):
+        return self.sql(node).query()
+     */
+
+    // fn sql<'py>(slf: PyRef<'py, Self>, obj: &Bound<'_, PyAny>, py: Python) -> PyResult<PyRef<'py, Self>> {
+    //     let func: PyObject = slf._proxy.getattr(py, "sql")?.into();
+    //     func.call1(py, (obj,))?;
+    //     Ok(slf)
+    // }
+
+    // python -> rust -> python may cause Already Borrowed error due to mutable borrow
+    // fn parse(&self, node: &Bound<'_, PyAny>, py: Python) -> PyResult<(String, Py<PyList>)> {
+    //     let func: PyObject = self._proxy.getattr(py, "sql")?.into();
+    //     func.call1(py, (node,))?;
+    //     self.query(py)
+    // }
 }
 
 #[pymodule]
@@ -160,7 +193,4 @@ mod rufee {
 
     #[pymodule_export]
     use super::Context;
-
-    #[pymodule_export]
-    use super::call_python_func;
 }

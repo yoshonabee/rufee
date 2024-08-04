@@ -20,6 +20,9 @@ class ContextProxy:
         "_values",
         "_sql",
         "state",
+        "scope",
+        "parentheses",
+        "subquery",
     }
 
     __rust_writable_attr_names__: str[str] = {
@@ -35,7 +38,7 @@ class ContextProxy:
     def __init__(self, **settings) -> None:
         self._py_context = _PeeweeContext()
         state = peewee.State(**settings)
-        self._rust_context = RufeeContext(state, [])
+        self._rust_context = RufeeContext(state, [], self)
         self.stack = []
 
     def __getattr__(self, attr_name):
@@ -63,18 +66,6 @@ class ContextProxy:
     def as_new(self) -> ContextProxy:
         return ContextProxy(**self.state.settings)
 
-    @property
-    def scope(self):
-        return self.state.scope
-
-    @property
-    def parentheses(self):
-        return self.state.parentheses
-
-    @property
-    def subquery(self):
-        return self.state.subquery
-
     @contextmanager
     def __call__(self, **overrides):
         if overrides and overrides.get("scope") == self.scope:
@@ -86,7 +77,6 @@ class ContextProxy:
         if self.parentheses:
             self.literal("(")
 
-        before = self.parentheses
         try:
             yield self
         finally:

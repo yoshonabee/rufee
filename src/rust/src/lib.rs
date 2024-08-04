@@ -113,19 +113,24 @@ impl Context {
         }
     }
 
-    fn literal(&mut self, keyword: &str) {
-        self._sql.push(keyword.to_string());
+    fn literal<'py>(mut slf: PyRefMut<'py, Self>, keyword: &str) -> PyResult<PyRefMut<'py, Self>> {
+        slf._sql.push(keyword.to_string());
+        Ok(slf)
     }
 
     fn query(&self, py: Python) -> PyResult<(String, Py<PyList>)> {
         Ok((self._sql.join(""), self._values.clone_ref(py)))
     }
 
-    fn __sql__(&self, ctx: &mut Context, py: Python) -> PyResult<()> {
+    fn __sql__<'py>(&self, mut ctx: PyRefMut<'py, Self>, py: Python) -> PyResult<PyRefMut<'py, Self>> {
+        // extend sql
+        ctx._sql.extend(self._sql.clone());
+
+        // extend values
         let func: PyObject = ctx._values.getattr(py, "extend")?.into();
-        let values = self._values.clone_ref(py);
+        let values: Py<PyList> = self._values.clone_ref(py);
         func.call1(py, (values,))?;
-        Ok(())
+        Ok(ctx)
     }
 
     fn push_values(&mut self, value: &Bound<'_, PyAny>, py: Python) -> PyResult<()> {

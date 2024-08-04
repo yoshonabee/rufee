@@ -8,6 +8,7 @@ import unittest
 
 USER = os.environ.get('USER') or 'root'
 
+# patch peewee.Context to use our ContextProxy
 from src import Context
 
 

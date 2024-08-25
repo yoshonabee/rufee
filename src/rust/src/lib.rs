@@ -3,14 +3,15 @@ use pyo3::types::PyList;
 
 // use std::collections::HashMap;
 use std::vec::Vec;
+use rufee_derive::HelloWorld;
 
-enum Scope {
-    NORMAL = 1,
-    SOURCE = 2,
-    VALUES = 4,
-    CTE = 8,
-    COLUMN = 16,
-}
+// enum Scope {
+//     NORMAL = 1,
+//     SOURCE = 2,
+//     VALUES = 4,
+//     CTE = 8,
+//     COLUMN = 16,
+// }
 
 // #[pyclass]
 // struct State {
@@ -82,8 +83,9 @@ enum Scope {
 //     }
 // }
 
+#[derive(HelloWorld)]
 #[pyclass]
-struct Context {
+pub struct Context {
     // stack: Vec<State>,
     #[pyo3(get)]
     _sql: Vec<String>,
@@ -97,7 +99,7 @@ struct Context {
     _proxy: PyObject, // ContextProxy obj in python
 }
 
-unsafe impl Send for Context {} // TDOO fix unsafe
+unsafe impl Send for Context {}
 
 #[pymethods]
 impl Context {
@@ -125,6 +127,7 @@ impl Context {
     }
 
     fn query(&self, py: Python) -> PyResult<(String, Py<PyList>)> {
+        self.hello_world();
         Ok((self._sql.join(""), self._values.clone_ref(py)))
     }
 
@@ -187,10 +190,76 @@ impl Context {
     // }
 }
 
+mod node;
+
 #[pymodule]
 mod rufee {
-    // use super::*;
+    use super::*;
 
     #[pymodule_export]
     use super::Context;
+
+    #[pymodule_export]
+    use super::node::Value;
+
+    #[pyclass(subclass)]
+    pub struct Animal {
+        #[pyo3(get)]
+        name: String,
+        #[pyo3(get)]
+        age: u8,
+        #[pyo3(get)]
+        hours_since_last_fed: u8,
+    }
+
+    #[pymethods]
+    impl Animal {
+        #[new]
+        fn new(name: String, age: u8, hours_since_last_fed: u8) -> Self {
+            Animal {
+                name,
+                age,
+                hours_since_last_fed,
+            }
+        }
+
+        fn feed(&mut self) {
+            self.hours_since_last_fed = 0;
+        }
+    }
+
+    #[pyclass(extends=Animal)]
+    pub struct Lion {
+        #[pyo3(get)]
+        favorite_meat: String,
+    }
+
+    #[pymethods]
+    impl Lion {
+        #[new]
+        fn new(
+            name: String,
+            age: u8,
+            hours_since_last_fed: u8,
+            favorite_meat: String,
+        ) -> PyResult<(Self, Animal)> {
+            Ok((
+                Lion { favorite_meat },
+                Animal {
+                    name,
+                    age,
+                    hours_since_last_fed,
+                },
+            ))
+        }
+
+        fn roar(&self) -> String {
+            "ROAR!!!!".to_string()
+        }
+
+        fn feed(mut slf: PyRefMut<'_, Self>) {
+            let super_ = slf.as_super();
+            super_.hours_since_last_fed = 10;
+        }
+    }
 }

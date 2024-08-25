@@ -1,3 +1,6 @@
+[workspace]
+members = ["rufee_derive"]
+
 [package]
 name = "rufee"
 version = "0.1.0-alpha.1"
@@ -9,4 +12,5 @@ name = "rufee"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = "0.22.0"
+pyo3 = { version = "0.22.0", features = ["multiple-pymethods", "py-clone"] }
+rufee_derive = { path = "./rufee_derive" }

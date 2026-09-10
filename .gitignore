@@ -1,0 +1,13 @@
+/target
+/.venv
+/dist
+/build
+/wheels
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.pytest_cache/
+.hypothesis/
+/peewee-src/
+/.worktrees/

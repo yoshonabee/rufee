@@ -1,0 +1,14 @@
+# MySQL for the peewee test-suite lane (scripts/run_peewee_tests.py -e mysql).
+services:
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: peewee
+      MYSQL_DATABASE: peewee_test
+    ports:
+      - "33306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-ppeewee", "--silent"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

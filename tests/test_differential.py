@@ -336,6 +336,19 @@ def condition(draw, sources, depth=0):
 
 
 @st.composite
+def where_arg(draw, sources, depth=0):
+    """A ``where()`` argument, sometimes wrapped in a one-element tuple.
+
+    A stray trailing comma turns a ``where()`` argument into a tuple, and peewee
+    accepts it: the tuple is rendered through ``EnclosedNodeList``, whose
+    constructor holds the "avoid double parentheses" hack. rufee has to match
+    that, so the grammar produces the shape.
+    """
+    cond = draw(condition(sources, depth))
+    return (cond,) if draw(st.integers(0, 4)) == 0 else cond
+
+
+@st.composite
 def ordering(draw, sources):
     source = draw(st.sampled_from(sources))
     field = draw(st.sampled_from(fields_of(source)))
@@ -505,7 +518,7 @@ def select_query(draw, depth=0, simple=False):
                 query = query.switch(model)
 
     if draw(bools):
-        query = query.where(draw(condition(sources, depth)))
+        query = query.where(draw(where_arg(sources, depth)))
     if not simple and draw(bools):
         group = draw(st.lists(st.sampled_from(fields_of(model)), min_size=1, max_size=2))
         query = query.group_by(*group)
@@ -654,7 +667,7 @@ def update_query(draw):
         model = Items
         query = Items.update({Items.qty: draw(ints)})
     if draw(bools):
-        query = query.where(draw(condition([model], depth=1)))
+        query = query.where(draw(where_arg([model], depth=1)))
     if draw(bools):
         query = query.order_by(*draw(st.lists(ordering([model]), min_size=1, max_size=2)))
     if draw(bools):
@@ -667,7 +680,7 @@ def delete_query(draw):
     model = draw(st.sampled_from(MODELS + [Items]))
     query = model.delete()
     if draw(bools):
-        query = query.where(draw(condition([model], depth=1)))
+        query = query.where(draw(where_arg([model], depth=1)))
     if draw(bools):
         query = query.order_by(*draw(st.lists(ordering([model]), min_size=1, max_size=2)))
     if draw(bools):
@@ -790,6 +803,16 @@ REPRESENTATIVE = {
     "offset_only": Tweet.select().offset(2),
     "paginate": Tweet.select().order_by(Tweet.id).paginate(3, 10),
     "negated": User.select().where(~(User.id == 1) & ~User.is_active),
+    # peewee renders a tuple where() argument through EnclosedNodeList, whose
+    # constructor renders a lone non-flat Expression flat to avoid `((...))`.
+    "where_tuple_one_expression": User.select().where(((User.id == 1) | User.is_active.is_null(),)),
+    "where_tuple_one_comparison": User.select().where((User.id == 1,)),
+    "where_tuple_two_expressions": User.select().where(((User.id == 1), User.is_active.is_null())),
+    "where_tuple_one_sql": User.select().where((SQL("1"),)),
+    "where_tuple_one_field": User.select().where((User.is_active,)),
+    "where_list_one_expression": User.select().where([(User.id == 1) | User.is_active.is_null()]),
+    "update_where_tuple": Tweet.update(likes=0).where(((Tweet.id == 1) | (Tweet.likes > 2),)),
+    "delete_where_tuple": Tweet.delete().where(((Tweet.id == 1) | (Tweet.likes > 2),)),
     "concat": User.select(User.username.concat("x")),
     "union_order_limit": (User.select(User.id) | Tweet.select(Tweet.id)).order_by(SQL("1")).limit(3),
     "union_all_intersect": (User.select(User.id) + Tweet.select(Tweet.id)) & Note.select(Note.id),

@@ -16,10 +16,17 @@ pub fn value_of<'py>(
     unpack: bool,
 ) -> PyResult<()> {
     if unpack && is_multi(ctx, v)? {
-        let items: Vec<Bound<'py, PyAny>> = v.try_iter()?.collect::<PyResult<_>>()?;
+        let mut items: Vec<Bound<'py, PyAny>> = v.try_iter()?.collect::<PyResult<_>>()?;
         if items.is_empty() {
             ctx.literal("()");
             return Ok(());
+        }
+        // peewee reaches this through `EnclosedNodeList(self.values)`, so the
+        // hack in its constructor applies here too. It shows up for a
+        // one-element tuple holding an expression — `where((a | b,))`, usually
+        // a stray trailing comma — which otherwise gains a paren level.
+        if let Some(flat) = lone_flat_expression(ctx, &items)? {
+            items[0] = flat;
         }
         return ctx.with(Over::default().parens(true), |ctx| {
             let n = items.len();
@@ -337,17 +344,27 @@ pub fn enclosed_list<'py>(ctx: &mut Ctx<'py>, nodes: &Bound<'py, PyAny>) -> PyRe
     enclosed_items(ctx, &items)
 }
 
-/// `EnclosedNodeList` including its "avoid double parentheses" hack: a single
-/// non-flat Expression is rendered flat.
+/// peewee's `NodeList.__init__` "avoid double parentheses" hack: inside a
+/// parenthesised list, a lone non-flat `Expression` is cloned with
+/// `flat = True` so it does not add a second pair of parentheses. Returns the
+/// clone when the hack applies, `None` when the list renders as-is.
+pub fn lone_flat_expression<'py>(
+    ctx: &Ctx<'py>,
+    items: &[Bound<'py, PyAny>],
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let [item] = items else { return Ok(None) };
+    if !isa(item, &ctx.c.expression)? || item.getattr(intern!(ctx.py, "flat"))?.is_truthy()? {
+        return Ok(None);
+    }
+    let clone = item.call_method0(intern!(ctx.py, "clone"))?;
+    clone.setattr(intern!(ctx.py, "flat"), true)?;
+    Ok(Some(clone))
+}
+
+/// `EnclosedNodeList` including the hack above.
 pub fn enclosed_items<'py>(ctx: &mut Ctx<'py>, items: &[Bound<'py, PyAny>]) -> PyResult<()> {
-    let py = ctx.py;
-    if items.len() == 1
-        && isa(&items[0], &ctx.c.expression)?
-        && !items[0].getattr(intern!(py, "flat"))?.is_truthy()?
-    {
-        let clone = items[0].call_method0("clone")?;
-        clone.setattr("flat", true)?;
-        return render_list(ctx, &[clone], ", ", true);
+    if let Some(flat) = lone_flat_expression(ctx, items)? {
+        return render_list(ctx, &[flat], ", ", true);
     }
     render_list(ctx, items, ", ", true)
 }

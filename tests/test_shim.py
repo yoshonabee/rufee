@@ -117,10 +117,19 @@ def test_renderer_exception_falls_back(db, Item, monkeypatch, caplog):
 
     monkeypatch.setattr(_context._native, "render", boom)
     q = Item.select()
-    with caplog.at_level(logging.ERROR, logger="rufee"):
+    with caplog.at_level(logging.DEBUG, logger="rufee"):
         assert db.get_sql_context().sql(q).query() == _reference(q)
     assert rufee.stats.fallback == 1
+    assert rufee.stats.errors == 1
     assert "rust exploded" in caplog.text
+
+
+def test_expected_errors_come_from_peewee_too(db, Item):
+    # sqlite has no FOR UPDATE: Rust raises ValueError, the fallback re-renders
+    # with peewee, which raises the same ValueError. Same behaviour, one fallback.
+    with pytest.raises(ValueError):
+        db.get_sql_context().sql(Item.select().for_update()).query()
+    assert rufee.stats.errors == 1
 
 
 def test_renderer_exception_in_strict_mode_propagates(db, Item, monkeypatch):

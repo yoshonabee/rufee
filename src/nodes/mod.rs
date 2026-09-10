@@ -62,6 +62,9 @@ enum Kind {
     ForUpdate,
     Star,
     NamespaceAttribute,
+    /// `BitField.flag()`'s descriptor: a class defined inside a method, so it
+    /// cannot be imported; recognised by name and shape.
+    FlagDescriptor,
     UnknownNode,
     ModelClass,
     Context,
@@ -134,6 +137,12 @@ fn classify<'py>(ctx: &Ctx<'py>, obj: &Bound<'py, PyAny>) -> PyResult<Kind> {
                 return Ok(*kind);
             }
         }
+        if obj.get_type().name()? == "FlagDescriptor"
+            && obj.hasattr(intern!(obj.py(), "_field"))?
+            && obj.hasattr(intern!(obj.py(), "_value"))?
+        {
+            return Ok(Kind::FlagDescriptor);
+        }
         return Ok(Kind::UnknownNode);
     }
     if is_model(obj, c)? {
@@ -186,6 +195,15 @@ pub fn render<'py>(ctx: &mut Ctx<'py>, obj: &Bound<'py, PyAny>) -> PyResult<()> 
         Kind::ForUpdate => query::for_update(ctx, obj),
         Kind::Star => basic::star(ctx, obj),
         Kind::NamespaceAttribute => basic::namespace_attribute(ctx, obj),
+        Kind::FlagDescriptor => {
+            // FlagDescriptor.__sql__: ctx.sql(self._field.bin_and(self._value) != 0)
+            let field = obj.getattr(intern!(py, "_field"))?;
+            let value = obj.getattr(intern!(py, "_value"))?;
+            let expr = field
+                .call_method1(intern!(py, "bin_and"), (value,))?
+                .call_method1(intern!(py, "__ne__"), (0,))?;
+            ctx.sql(&expr)
+        }
         Kind::UnknownNode => Err(ctx.unsupported(&format!("node type {}", obj.get_type().name()?))),
         Kind::ModelClass => {
             // Context.sql(): a Model class renders as its table.

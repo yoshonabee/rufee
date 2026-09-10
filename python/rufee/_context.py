@@ -41,6 +41,7 @@ class Stats:
 
     rust: int = 0        # queries rendered by Rust and returned
     fallback: int = 0    # queries rendered by peewee after Rust declined
+    errors: int = 0      # of those, fallbacks caused by a non-Unsupported exception
     shadow: int = 0      # shadow comparisons performed
     mismatch: int = 0    # shadow comparisons that differed
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -51,7 +52,7 @@ class Stats:
 
     def reset(self) -> None:
         with self._lock:
-            self.rust = self.fallback = self.shadow = self.mismatch = 0
+            self.rust = self.fallback = self.errors = self.shadow = self.mismatch = 0
 
 
 stats = Stats()
@@ -149,7 +150,12 @@ class Context(_PeeweeContext):
         except Unsupported as exc:
             return self._fallback(query, exc)
         except Exception as exc:  # noqa: BLE001 - any Rust-side failure is a fallback
-            log.error("rufee: renderer raised %r for %s; falling back",
+            # Usually a legitimate error peewee raises too (ValueError from an
+            # on-conflict hook, "FOR UPDATE not supported", ...): peewee's own
+            # renderer will raise it again during the fallback. A genuine Rust
+            # bug also lands here; shadow mode is how those are found.
+            stats._bump("errors")
+            log.debug("rufee: renderer raised %r for %s; falling back",
                       exc, type(query).__name__)
             return self._fallback(query, exc)
 

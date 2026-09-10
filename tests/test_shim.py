@@ -19,13 +19,30 @@ def test_is_a_peewee_context(db):
     assert isinstance(ctx, peewee.Context)
 
 
-def test_fallback_matches_peewee(db, Item):
+@pytest.fixture
+def unsupported_native(monkeypatch):
+    """Force the Rust side to decline every query."""
+
+    def decline(query, scope, parentheses, settings):
+        raise rufee.Unsupported("forced by test")
+
+    monkeypatch.setattr(_context._native, "render", decline)
+
+
+def test_fallback_matches_peewee(db, Item, unsupported_native):
     q = Item.select().where(Item.qty > 3).order_by(Item.name)
     assert db.get_sql_context().sql(q).query() == _reference(q)
-    assert rufee.stats.fallback >= 1
+    assert rufee.stats.fallback == 1
 
 
-def test_strict_raises_unsupported(db, Item):
+def test_rust_matches_peewee_on_simple_select(db, Item):
+    q = Item.select().where(Item.qty > 3).order_by(Item.name)
+    assert db.get_sql_context().sql(q).query() == _reference(q)
+    assert rufee.stats.rust == 1
+    assert rufee.stats.fallback == 0
+
+
+def test_strict_raises_unsupported(db, Item, unsupported_native):
     rufee.configure(fallback=False)
     with pytest.raises(rufee.Unsupported):
         db.get_sql_context().sql(Item.select()).query()
@@ -152,7 +169,7 @@ def test_shadow_mode_silent_when_identical(db, Item, monkeypatch, caplog):
     assert caplog.text == ""
 
 
-def test_shadow_mode_still_falls_back_when_unsupported(db, Item):
+def test_shadow_mode_still_falls_back_when_unsupported(db, Item, unsupported_native):
     rufee.configure(mode="shadow")
     q = Item.select()
     assert db.get_sql_context().sql(q).query() == _reference(q)

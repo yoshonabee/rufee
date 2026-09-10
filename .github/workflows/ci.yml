@@ -34,7 +34,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: uv venv .venv
+      - run: uv venv --clear .venv
       - run: NO_SQLITE=1 uv pip install -p .venv/bin/python --no-binary peewee -e ".[dev]"
       - run: VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
       - run: .venv/bin/python -m pytest -q

@@ -1,5 +1,6 @@
 //! Expressions, values, entities and the small wrapper nodes.
 
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyFrozenSet, PyList, PySet, PyTuple};
 
@@ -70,25 +71,28 @@ pub fn converter_arg<'a, 'py>(conv: &'a Bound<'py, PyAny>) -> Converter<'a, 'py>
 
 // Value.__sql__
 pub fn value<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    if node.getattr("multi")?.is_truthy()? {
-        let values = node.getattr("values")?;
+    let py = ctx.py;
+    if node.getattr(intern!(py, "multi"))?.is_truthy()? {
+        let values = node.getattr(intern!(py, "values"))?;
         return enclosed_list(ctx, &values);
     }
-    let v = node.getattr("value")?;
-    let conv = node.getattr("converter")?;
+    let v = node.getattr(intern!(py, "value"))?;
+    let conv = node.getattr(intern!(py, "converter"))?;
     ctx.value(&v, converter_arg(&conv), true)
 }
 
 // ValueLiterals.__sql__
 pub fn value_literals<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    let inner = node.getattr("node")?;
+    let py = ctx.py;
+    let inner = node.getattr(intern!(py, "node"))?;
     ctx.with(Over::default().value_literals(true), |ctx| ctx.sql(&inner))
 }
 
 // Entity.__sql__ — `_path` parts are already `"`-escaped by Entity.__init__,
 // so write them verbatim with the state's quote characters.
 pub fn entity<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    let path: Vec<String> = node.getattr("_path")?.extract()?;
+    let py = ctx.py;
+    let path: Vec<String> = node.getattr(intern!(py, "_path"))?.extract()?;
     let q = ctx
         .state
         .settings
@@ -110,9 +114,10 @@ pub fn entity<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
 
 // SQL.__sql__
 pub fn sql<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    let s: String = node.getattr("sql")?.extract()?;
+    let py = ctx.py;
+    let s: String = node.getattr(intern!(py, "sql"))?.extract()?;
     ctx.literal(&s);
-    let params = node.getattr("params")?;
+    let params = node.getattr(intern!(py, "params"))?;
     if params.is_truthy()? {
         for p in params.try_iter()? {
             ctx.value(&p?, Converter::NoConvert, false)?;
@@ -123,11 +128,12 @@ pub fn sql<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
 
 // Column.__sql__
 pub fn column<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    let name: String = node.getattr("name")?.extract()?;
+    let py = ctx.py;
+    let name: String = node.getattr(intern!(py, "name"))?.extract()?;
     if ctx.scope() == SCOPE_VALUES {
         return ctx.entity(&[&name]);
     }
-    let source = node.getattr("source")?;
+    let source = node.getattr(intern!(py, "source"))?;
     ctx.with(Over::default().scope(SCOPE_COLUMN), |ctx| {
         ctx.sql(&source)?;
         ctx.literal(".");
@@ -137,9 +143,10 @@ pub fn column<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
 
 // Alias.__sql__
 pub fn alias<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    let a: String = node.getattr("_alias")?.extract()?;
+    let py = ctx.py;
+    let a: String = node.getattr(intern!(py, "_alias"))?.extract()?;
     if ctx.scope() == SCOPE_SOURCE {
-        let inner = node.getattr("node")?;
+        let inner = node.getattr(intern!(py, "node"))?;
         ctx.sql(&inner)?;
         ctx.literal(" AS ");
     }
@@ -148,23 +155,26 @@ pub fn alias<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> 
 
 // BindTo.__sql__
 pub fn bind_to<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    let inner = node.getattr("node")?;
+    let py = ctx.py;
+    let inner = node.getattr(intern!(py, "node"))?;
     ctx.sql(&inner)
 }
 
 // Negated.__sql__
 pub fn negated<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = ctx.py;
     ctx.literal("NOT ");
-    let inner = node.getattr("node")?;
+    let inner = node.getattr(intern!(py, "node"))?;
     ctx.sql(&inner)
 }
 
 // BitwiseNegated.__sql__
 pub fn bitwise_negated<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    let op: String = node.getattr("op")?.extract()?;
+    let py = ctx.py;
+    let op: String = node.getattr(intern!(py, "op"))?.extract()?;
     let op_sql = map_operation(ctx, &op)?;
     ctx.literal(&op_sql);
-    let inner = node.getattr("node")?;
+    let inner = node.getattr(intern!(py, "node"))?;
     ctx.sql(&inner)
 }
 
@@ -184,17 +194,19 @@ pub fn map_operation(ctx: &Ctx<'_>, op: &str) -> PyResult<String> {
 
 // Cast.__sql__
 pub fn cast<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = ctx.py;
     ctx.literal("CAST(");
-    let inner = node.getattr("node")?;
+    let inner = node.getattr(intern!(py, "node"))?;
     ctx.sql(&inner)?;
-    let as_type: String = node.getattr("_cast")?.extract()?;
+    let as_type: String = node.getattr(intern!(py, "_cast"))?.extract()?;
     ctx.literal(&format!(" AS {})", as_type));
     Ok(())
 }
 
 // Ordering.__sql__
 pub fn ordering<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    let nulls = node.getattr("nulls")?;
+    let py = ctx.py;
+    let nulls = node.getattr(intern!(py, "nulls"))?;
     let has_nulls = nulls.is_truthy()?;
     let nulls_ordering = ctx.state.settings.nulls_ordering;
     if has_nulls && !nulls_ordering {
@@ -203,11 +215,11 @@ pub fn ordering<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<(
         ctx.sql(&case)?;
         ctx.literal(", ");
     }
-    let inner = node.getattr("node")?;
+    let inner = node.getattr(intern!(py, "node"))?;
     ctx.sql(&inner)?;
-    let direction: String = node.getattr("direction")?.extract()?;
+    let direction: String = node.getattr(intern!(py, "direction"))?.extract()?;
     ctx.literal(&format!(" {}", direction));
-    let collation = node.getattr("collation")?;
+    let collation = node.getattr(intern!(py, "collation"))?;
     if collation.is_truthy()? {
         ctx.literal(&format!(" COLLATE {}", collation.extract::<String>()?));
     }
@@ -219,11 +231,12 @@ pub fn ordering<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<(
 
 // Expression.__sql__
 pub fn expression<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = ctx.py;
     let c = ctx.c;
-    let lhs = node.getattr("lhs")?;
-    let op: String = node.getattr("op")?.extract()?;
-    let rhs = node.getattr("rhs")?;
-    let flat = node.getattr("flat")?.is_truthy()?;
+    let lhs = node.getattr(intern!(py, "lhs"))?;
+    let op: String = node.getattr(intern!(py, "op"))?.extract()?;
+    let rhs = node.getattr(intern!(py, "rhs"))?;
+    let flat = node.getattr(intern!(py, "flat"))?.is_truthy()?;
 
     let mut over = Over::default().parens(!flat).in_expr(true);
 
@@ -233,12 +246,12 @@ pub fn expression<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult
         inner = lhs.call_method0("unwrap")?;
     }
     let raw_coerce = lhs
-        .getattr("_coerce")
+        .getattr(intern!(py, "_coerce"))
         .map(|v| v.is_truthy().unwrap_or(true))
         .unwrap_or(true);
     if isa(&inner, &c.field)? && raw_coerce {
         over = over
-            .converter(Some(inner.getattr("db_value")?.unbind()))
+            .converter(Some(inner.getattr(intern!(py, "db_value"))?.unbind()))
             .is_fk_expr(isa(&inner, &c.foreign_key_field)?);
     } else {
         over = over.converter(None);
@@ -271,9 +284,10 @@ fn rhs_renders_empty<'py>(ctx: &Ctx<'py>, rhs: &Bound<'py, PyAny>) -> PyResult<b
 
 // NodeList.__sql__
 pub fn node_list<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    let nodes = node.getattr("nodes")?;
-    let glue: String = node.getattr("glue")?.extract()?;
-    let parens = node.getattr("parens")?.is_truthy()?;
+    let py = ctx.py;
+    let nodes = node.getattr(intern!(py, "nodes"))?;
+    let glue: String = node.getattr(intern!(py, "glue"))?.extract()?;
+    let parens = node.getattr(intern!(py, "parens"))?.is_truthy()?;
     let items: Vec<Bound<'py, PyAny>> = nodes.try_iter()?.collect::<PyResult<_>>()?;
     render_list(ctx, &items, &glue, parens)
 }
@@ -317,9 +331,10 @@ pub fn enclosed_list<'py>(ctx: &mut Ctx<'py>, nodes: &Bound<'py, PyAny>) -> PyRe
 /// `EnclosedNodeList` including its "avoid double parentheses" hack: a single
 /// non-flat Expression is rendered flat.
 pub fn enclosed_items<'py>(ctx: &mut Ctx<'py>, items: &[Bound<'py, PyAny>]) -> PyResult<()> {
+    let py = ctx.py;
     if items.len() == 1
         && isa(&items[0], &ctx.c.expression)?
-        && !items[0].getattr("flat")?.is_truthy()?
+        && !items[0].getattr(intern!(py, "flat"))?.is_truthy()?
     {
         let clone = items[0].call_method0("clone")?;
         clone.setattr("flat", true)?;
@@ -330,7 +345,8 @@ pub fn enclosed_items<'py>(ctx: &mut Ctx<'py>, items: &[Bound<'py, PyAny>]) -> P
 
 // Star.__sql__
 pub fn star<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    let source = node.getattr("source")?;
+    let py = ctx.py;
+    let source = node.getattr(intern!(py, "source"))?;
     ctx.with(Over::default().scope(SCOPE_COLUMN), |ctx| ctx.sql(&source))?;
     ctx.literal(".*");
     Ok(())
@@ -338,14 +354,19 @@ pub fn star<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
 
 // QualifiedNames.__sql__
 pub fn qualified_names<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    let inner = node.getattr("node")?;
+    let py = ctx.py;
+    let inner = node.getattr(intern!(py, "node"))?;
     ctx.with(Over::default().scope(SCOPE_COLUMN), |ctx| ctx.sql(&inner))
 }
 
 // NamespaceAttribute.__sql__
 pub fn namespace_attribute<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
-    let ns: String = node.getattr("_namespace")?.getattr("_name")?.extract()?;
-    let attr: String = node.getattr("_attribute")?.extract()?;
+    let py = ctx.py;
+    let ns: String = node
+        .getattr(intern!(py, "_namespace"))?
+        .getattr(intern!(py, "_name"))?
+        .extract()?;
+    let attr: String = node.getattr(intern!(py, "_attribute"))?.extract()?;
     ctx.literal(&format!("{}.", ns));
     ctx.entity(&[&attr])
 }

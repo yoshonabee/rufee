@@ -4,6 +4,7 @@
 //! `with ctx(...)`, `parentheses` is not; entering a state with `parentheses`
 //! writes `(` and leaving it writes `)`.
 
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 
@@ -413,7 +414,7 @@ impl<'py> Ctx<'py> {
             .context
             .bind(py)
             .call((), Some(self.state.settings.raw.bind(py)))?;
-        let state_cls = py.import("peewee")?.getattr("State")?;
+        let state_cls = py.import("peewee")?.getattr(intern!(py, "State"))?;
         let kwargs = self.state.settings.raw.bind(py);
         let st = state_cls.call((self.state.scope, self.state.parentheses), Some(kwargs))?;
         pctx.setattr("state", st)?;
@@ -452,7 +453,10 @@ fn query_val_transform(v: &Bound<'_, PyAny>, c: &Classes) -> PyResult<String> {
     }
     if v.is_instance_of::<pyo3::types::PyInt>() {
         // int('%s' % int(v)) also maps bool -> 0/1
-        let i = py.import("builtins")?.getattr("int")?.call1((v,))?;
+        let i = py
+            .import("builtins")?
+            .getattr(intern!(py, "int"))?
+            .call1((v,))?;
         return Ok(i.str()?.to_str()?.to_string());
     }
     if v.is_none() {

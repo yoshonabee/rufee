@@ -192,10 +192,18 @@ Ordered. Done items are kept for the record.
 8. **Docs**: user guide (installation, `context_class`, shadow mode, logging),
    contributor guide (how to add a node type: Rust match arm + hypothesis rule
    + which peewee tests it unlocks).
-9. **Performance pass**: profile the walker (attribute reads, `Settings`
-   clones per scope change, Python-dict alias manager, `as_new()` probe for
-   empty `IN`) — the PoC walker reached ~9x on the join query, the faithful
-   port is at 7.2x.
+9. **Performance pass** (optional, diminishing returns). Of the 15 µs for the
+   join query, 13.1 µs is `_native.render()` itself, 1.3 µs `Context(**opts)`
+   construction and 0.6 µs the Python shim. The Rust part already matches the
+   original proof-of-concept walker (12.9 µs); what remains is dominated by
+   reading the Python node tree through the C API (a few hundred
+   `getattr`/`isinstance`/dict operations per query at ~50–100 ns each).
+   Candidates, roughly in order of payoff: cache per-`Field` derived data
+   (column name, table path) by object identity; skip the empty-`IN` probe
+   when the rhs is a non-empty list/tuple (provably renders non-empty);
+   replace the per-scope `Settings` clone with an undo log; trim the shim.
+   Realistic target ~8–9 µs (12x). Going further means not reading the
+   Python tree at all, which is the rejected "AST in Rust" design.
 10. **Release**: version, changelog, publish wheels from the `v*` tag workflow.
 11. **Shadow-mode field report**: run a real application in `RUFEE_MODE=shadow`
     and collect mismatches before recommending `rust` mode.

@@ -14,8 +14,8 @@ dev:             ## build the extension into .venv (release)
 test: cargo-test ## rust + python tests
 	$(PY) -m pytest -q
 
-cargo-test:
-	cargo test --quiet
+cargo-test:      ## needs a Python to link against; PYO3_PYTHON points at the venv interpreter
+	PYO3_PYTHON=$(CURDIR)/$(PY) cargo test --quiet
 
 lint:
 	cargo fmt --check

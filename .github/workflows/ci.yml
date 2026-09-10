@@ -39,6 +39,54 @@ jobs:
       - run: VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
       - run: .venv/bin/python -m pytest -q
 
+  peewee-suite:
+    # peewee's own test-suite through rufee.Context. safe must be green;
+    # strict reports the coverage pass rate.
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: peewee
+          MYSQL_DATABASE: peewee_test
+        ports: ["33306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -uroot -ppeewee --silent"
+          --health-interval 2s --health-timeout 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+      - run: uv venv --clear .venv
+      - run: NO_SQLITE=1 uv pip install -p .venv/bin/python --no-binary peewee -e ".[dev]"
+      - run: VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
+      - run: make peewee-src
+      - name: sqlite safe (must pass)
+        run: .venv/bin/python scripts/run_peewee_tests.py -e sqlite --safe
+      - name: mysql safe (must pass)
+        run: .venv/bin/python scripts/run_peewee_tests.py -e mysql --safe
+      - name: sqlite strict (coverage report)
+        run: .venv/bin/python scripts/run_peewee_tests.py -e sqlite --strict --json strict-sqlite.json | tail -40
+      - name: mysql strict (coverage report)
+        run: .venv/bin/python scripts/run_peewee_tests.py -e mysql --strict --json strict-mysql.json | tail -40
+      - name: strict pass rate to job summary
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          print("| engine | strict pass rate | pass | unsupported | fail | error |")
+          print("|---|---|---|---|---|---|")
+          for e in ("sqlite", "mysql"):
+              d = json.load(open(f"strict-{e}.json")); c = d["counts"]
+              print(f"| {e} | {d['pass_rate']:.1%} | {c['pass']} | {c['unsupported']} | {c['fail']} | {c['error']} |")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strict-reports
+          path: strict-*.json
+
   wheels:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [rust, python]

@@ -60,7 +60,7 @@ fn apply_returning<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResul
 /// helpers that take a context (`Node.get_sort_key(ctx)`).
 fn python_ctx<'py>(ctx: &Ctx<'py>) -> PyResult<Bound<'py, PyAny>> {
     let py = ctx.py;
-    let raw = ctx.state.settings.raw.bind(py);
+    let raw = ctx.dialect.raw.bind(py);
     let pctx = ctx.c.context.bind(py).call((), Some(raw))?;
     let state_cls = py.import("peewee")?.getattr("State")?;
     let st = state_cls.call((ctx.state.scope, ctx.state.parentheses), Some(raw))?;
@@ -275,7 +275,7 @@ pub fn insert<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
         // ctx.sql(stmt or SQL('INSERT'))
         let mut stmt = None;
         if has_conflict {
-            let conflict_statement = ctx.state.settings.conflict_statement.clone();
+            let conflict_statement = ctx.dialect.conflict_statement.clone();
             let s = conflict_hook(ctx, &conflict_statement, &on_conflict, node)?;
             if s.is_truthy()? {
                 stmt = Some(s);
@@ -318,7 +318,7 @@ pub fn insert<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
         node.setattr(intern!(py, "_query_type"), query_type)?;
 
         if has_conflict {
-            let conflict_update = ctx.state.settings.conflict_update.clone();
+            let conflict_update = ctx.dialect.conflict_update.clone();
             let upd = conflict_hook(ctx, &conflict_update, &on_conflict, node)?;
             if !upd.is_none() {
                 ctx.literal(" ");

@@ -47,7 +47,7 @@ pub fn apply_ordering<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyRe
     }
     let limit = node.getattr(intern!(py, "_limit"))?;
     let offset = node.getattr(intern!(py, "_offset"))?;
-    let limit_max = ctx.state.settings.limit_max.clone();
+    let limit_max = ctx.dialect.limit_max.clone();
     if !limit.is_none() || (!offset.is_none() && limit_max.is_some()) {
         let lim = if limit.is_none() {
             limit_max.unwrap().bind(py).clone()
@@ -98,9 +98,9 @@ pub fn select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
     if node.getattr(intern!(py, "_lateral"))?.is_truthy()? && ctx.scope() == SCOPE_SOURCE {
         ctx.literal("LATERAL ");
     }
-    let is_subquery = ctx.state.settings.subquery;
+    let is_subquery = ctx.state.flags.subquery;
     let mut parens = is_subquery || ctx.scope() == SCOPE_SOURCE;
-    if ctx.state.settings.in_function && ctx.state.settings.function_arg_count == Some(1) {
+    if ctx.state.flags.in_function && ctx.state.flags.function_arg_count == Some(1) {
         parens = false;
     }
     let over = Over::default()
@@ -158,7 +158,7 @@ pub fn select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
 
         let for_update = node.getattr(intern!(py, "_for_update"))?;
         if for_update.is_truthy()? {
-            if !ctx.state.settings.for_update {
+            if !ctx.dialect.for_update {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "FOR UPDATE specified but not supported by database.",
                 ));
@@ -174,8 +174,8 @@ pub fn select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
         Ok(())
     })?;
 
-    if ctx.state.settings.in_function
-        || (ctx.state.settings.in_expr && node.getattr(intern!(py, "_alias"))?.is_none())
+    if ctx.state.flags.in_function
+        || (ctx.state.flags.in_expr && node.getattr(intern!(py, "_alias"))?.is_none())
     {
         return Ok(());
     }
@@ -227,7 +227,7 @@ pub fn compound_select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyR
         return apply_column(ctx, node);
     }
     query_ctes(ctx, node)?;
-    let outer_parens = ctx.state.settings.subquery || ctx.scope() == SCOPE_SOURCE;
+    let outer_parens = ctx.state.flags.subquery || ctx.scope() == SCOPE_SOURCE;
     let lhs = node.getattr(intern!(py, "lhs"))?;
     let rhs = node.getattr(intern!(py, "rhs"))?;
     let op: String = node.getattr(intern!(py, "op"))?.extract()?;
@@ -259,11 +259,11 @@ pub fn compound_select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyR
 }
 
 fn wrap_parens<'py>(ctx: &Ctx<'py>, subq: &Bound<'py, PyAny>) -> PyResult<bool> {
-    match ctx.state.settings.compound_select_parentheses {
+    match ctx.dialect.compound_select_parentheses {
         None | Some(CSQ_PARENTHESES_NEVER) => Ok(false),
         Some(CSQ_PARENTHESES_ALWAYS) => Ok(true),
         Some(CSQ_PARENTHESES_UNNESTED) => {
-            if ctx.state.settings.in_expr || ctx.state.settings.in_function {
+            if ctx.state.flags.in_expr || ctx.state.flags.in_function {
                 return Ok(false);
             }
             Ok(!isa(subq, &ctx.c.compound_select_query)?)

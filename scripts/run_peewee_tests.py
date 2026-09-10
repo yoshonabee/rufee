@@ -229,6 +229,8 @@ def main(argv=None):
     if not (src / "tests" / "base.py").exists():
         sys.exit(f"peewee test-suite not found at {src}; run `make peewee-src` first")
     sys.path.insert(0, str(src))
+    if args.json:
+        args.json = str(Path(args.json).resolve())  # before chdir below
     os.chdir(src)  # peewee's tests write sqlite files relative to cwd
 
     cleanup_scratch_files()

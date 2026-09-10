@@ -66,6 +66,8 @@ classes! {
     raw_query = "peewee"::"RawQuery",
     context = "peewee"::"Context",
     on_conflict = "peewee"::"OnConflict",
+    model_write_query_helper = "peewee"::"_ModelWriteQueryHelper",
+    qualify_names = "peewee"::"qualify_names",
     mapping = "collections.abc"::"Mapping",
     range = "builtins"::"range",
     datetime = "datetime"::"datetime",

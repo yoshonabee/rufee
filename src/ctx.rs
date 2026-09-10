@@ -5,6 +5,8 @@
 //! writes `(` and leaving it writes `)`.
 
 use pyo3::intern;
+use std::collections::HashMap;
+
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 
@@ -187,7 +189,13 @@ impl Over {
 /// peewee's `AliasManager`: a stack of `{source: alias}` dicts keyed with
 /// Python hashing (sources define `__hash__`/`__eq__`), one counter.
 pub struct AliasManager {
+    /// Source of truth: peewee semantics, keyed with Python hash/eq.
     mapping: Vec<Py<PyDict>>,
+    /// Identity fast path per level: object address -> alias. Sources are
+    /// looked up many times per query (every column reference) and each dict
+    /// lookup costs a Python-level `__hash__` call; the same object always maps
+    /// to the same alias within a level.
+    by_id: Vec<HashMap<usize, String>>,
     current: usize, // 1-based like peewee's `_current_index`
     counter: usize,
 }
@@ -196,6 +204,7 @@ impl AliasManager {
     fn new(py: Python<'_>) -> Self {
         AliasManager {
             mapping: vec![PyDict::new(py).unbind()],
+            by_id: vec![HashMap::new()],
             current: 1,
             counter: 0,
         }
@@ -207,25 +216,49 @@ impl AliasManager {
 
     /// `alias_manager.add(source)` / `alias_manager[source]`.
     pub fn get(&mut self, source: &Bound<'_, PyAny>) -> PyResult<String> {
-        let m = self.map(source.py());
-        if let Some(a) = m.get_item(source)? {
-            return a.extract();
+        let key = source.as_ptr() as usize;
+        if let Some(a) = self.by_id[self.current - 1].get(&key) {
+            return Ok(a.clone());
         }
-        self.counter += 1;
-        let alias = format!("t{}", self.counter);
-        m.set_item(source, &alias)?;
+        let m = self.map(source.py());
+        let alias = match m.get_item(source)? {
+            Some(a) => a.extract::<String>()?,
+            None => {
+                self.counter += 1;
+                let alias = format!("t{}", self.counter);
+                m.set_item(source, &alias)?;
+                alias
+            }
+        };
+        self.by_id[self.current - 1].insert(key, alias.clone());
         Ok(alias)
     }
 
     /// `alias_manager[source] = alias`.
     pub fn set(&mut self, source: &Bound<'_, PyAny>, alias: &str) -> PyResult<()> {
-        self.map(source.py()).set_item(source, alias)
+        let m = self.map(source.py());
+        // If an *equal* (not identical) source already had a different alias,
+        // other objects' identity entries could now be stale; drop them.
+        if let Some(prev) = m.get_item(source)? {
+            if prev.extract::<String>()? != alias {
+                self.by_id[self.current - 1].clear();
+            }
+        }
+        m.set_item(source, alias)?;
+        self.by_id[self.current - 1].insert(source.as_ptr() as usize, alias.to_string());
+        Ok(())
     }
 
     pub fn push(&mut self, py: Python<'_>) {
         self.current += 1;
         if self.current > self.mapping.len() {
             self.mapping.push(PyDict::new(py).unbind());
+            self.by_id.push(HashMap::new());
+        } else {
+            // peewee's pop() leaves the old dict in place but a fresh push()
+            // must not see stale identity entries... it does see the stale
+            // *dict* entries though (peewee never clears them), so keep both
+            // views consistent by leaving by_id alone as well.
         }
     }
 

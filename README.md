@@ -72,13 +72,15 @@ MySQL dialect options):
 
 | query | peewee | rufee | ratio |
 |---|---|---|---|
-| join select (2 tables, IN + 2 predicates, ORDER BY, LIMIT/OFFSET) | 107 µs | 15 µs | 7.2x |
-| simple select (1 predicate, ORDER BY, LIMIT) | 64 µs | 10 µs | 6.5x |
-| `SELECT COUNT(...) WHERE` | 34 µs | 6 µs | 5.6x |
-| insert (7 columns) | 37 µs | 10 µs | 3.8x |
-| `insert_many`, 100 rows | 1225 µs | 270 µs | 4.5x |
-| update (expression + where) | 39 µs | 7 µs | 5.4x |
-| delete (IN) | 28 µs | 5 µs | 5.2x |
+| join select (2 tables, IN + 2 predicates, ORDER BY, LIMIT/OFFSET) | 108 µs | 9.8 µs | 11.0x |
+| simple select (1 predicate, ORDER BY, LIMIT) | 64 µs | 7.0 µs | 9.1x |
+| `SELECT COUNT(...) WHERE` | 34 µs | 4.6 µs | 7.3x |
+| insert (7 columns) | 36 µs | 7.2 µs | 5.0x |
+| `insert_many`, 100 rows | 1246 µs | 195 µs | 6.4x |
+| update (expression + where) | 40 µs | 5.9 µs | 6.8x |
+| delete (IN) | 28 µs | 4.5 µs | 6.3x |
+
+Reproduce with `scripts/bench.py` (`--sqlite` for sqlite options, `--json`).
 
 Query *construction* on the Python side (`Model.select().where(...)`) is
 unchanged, as is row hydration (`CursorWrapper`, `Model.__init__`); both are
@@ -192,18 +194,18 @@ Ordered. Done items are kept for the record.
 8. **Docs**: user guide (installation, `context_class`, shadow mode, logging),
    contributor guide (how to add a node type: Rust match arm + hypothesis rule
    + which peewee tests it unlocks).
-9. **Performance pass** (optional, diminishing returns). Of the 15 µs for the
-   join query, 13.1 µs is `_native.render()` itself, 1.3 µs `Context(**opts)`
-   construction and 0.6 µs the Python shim. The Rust part already matches the
-   original proof-of-concept walker (12.9 µs); what remains is dominated by
-   reading the Python node tree through the C API (a few hundred
-   `getattr`/`isinstance`/dict operations per query at ~50–100 ns each).
-   Candidates, roughly in order of payoff: cache per-`Field` derived data
-   (column name, table path) by object identity; skip the empty-`IN` probe
-   when the rhs is a non-empty list/tuple (provably renders non-empty);
-   replace the per-scope `Settings` clone with an undo log; trim the shim.
-   Realistic target ~8–9 µs (12x). Going further means not reading the
-   Python tree at all, which is the rejected "AST in Rust" design.
+9. ~~**Performance pass**~~ Done. Join select went from 14.7 to 9.8 µs
+   (7.3x → 11.0x), `insert_many` ×100 from 275 to 195 µs, by: keeping the
+   dialect options off the per-scope state so a scope change clones seven
+   flags instead of the whole settings; an identity fast path in front of the
+   alias dict (each lookup otherwise ran a Python-level `__hash__`); skipping
+   the empty-`IN` probe when the rhs is a plain non-empty collection;
+   exception-free dict lookups for plain-dict insert rows; sorting `Field`
+   columns in Rust; no set arithmetic when a model has no defaults; fewer
+   String allocations. What remains is reading the Python node tree through
+   the C API and calling each field's `db_value` converter, both required for
+   byte-identical output. Going further means not reading the Python tree at
+   all, which is the rejected "AST in Rust" design.
 10. **Release**: version, changelog, publish wheels from the `v*` tag workflow.
 11. **Shadow-mode field report**: run a real application in `RUFEE_MODE=shadow`
     and collect mismatches before recommending `rust` mode.

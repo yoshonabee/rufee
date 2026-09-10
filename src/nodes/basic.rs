@@ -267,7 +267,25 @@ pub fn expression<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult
 }
 
 /// `ctx.as_new().parse(rhs)[0] == '()'`
+///
+/// Fast path: a plain Python collection whose items are all non-Node values
+/// renders as one placeholder per item, so it is empty iff it has no items.
+/// That avoids rendering (and converting) every IN value twice.
 fn rhs_renders_empty<'py>(ctx: &Ctx<'py>, rhs: &Bound<'py, PyAny>) -> PyResult<bool> {
+    if is_multi(ctx, rhs)? {
+        let mut n = 0usize;
+        let mut plain = true;
+        for item in rhs.try_iter()? {
+            n += 1;
+            if isa(&item?, &ctx.c.node)? {
+                plain = false;
+                break;
+            }
+        }
+        if plain {
+            return Ok(n == 0);
+        }
+    }
     let mut probe = ctx.as_new()?;
     probe.sql(rhs)?;
     Ok(probe.sql == "()")

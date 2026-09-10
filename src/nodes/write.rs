@@ -14,7 +14,7 @@
 use pyo3::exceptions::{PyIndexError, PyKeyError, PyTypeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PySet, PyString, PyTuple};
+use pyo3::types::{PyDict, PyList, PySet, PyString, PyTuple};
 
 use crate::classes::{isa, SCOPE_NORMAL, SCOPE_SOURCE, SCOPE_VALUES};
 use crate::ctx::{Converter, Ctx, Over};
@@ -60,7 +60,7 @@ fn apply_returning<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResul
 /// helpers that take a context (`Node.get_sort_key(ctx)`).
 fn python_ctx<'py>(ctx: &Ctx<'py>) -> PyResult<Bound<'py, PyAny>> {
     let py = ctx.py;
-    let raw = ctx.state.settings.raw.bind(py);
+    let raw = ctx.dialect.raw.bind(py);
     let pctx = ctx.c.context.bind(py).call((), Some(raw))?;
     let state_cls = py.import("peewee")?.getattr("State")?;
     let st = state_cls.call((ctx.state.scope, ctx.state.parentheses), Some(raw))?;
@@ -98,10 +98,34 @@ fn sort_key<'py>(
 }
 
 /// `sorted(nodes, key=lambda obj: obj.get_sort_key(ctx))`, as the permutation
-/// of indices. Sorting is done by Python on `(key, index)` tuples so that
-/// comparison semantics (and stability) are exactly `sorted()`'s.
+/// of indices.
+///
+/// Fast path: when every node is a `Field`, its key is `_sort_key`, a
+/// `(int, int)` tuple; sort those in Rust (stable, like `sorted()`).
+/// Otherwise sorting is done by Python on `(key, index)` tuples so that
+/// comparison semantics and errors are exactly `sorted()`'s.
 fn sort_order<'py>(ctx: &Ctx<'py>, nodes: &[Bound<'py, PyAny>]) -> PyResult<Vec<usize>> {
     let py = ctx.py;
+    let c = ctx.c;
+    let mut int_keys: Vec<((i64, i64), usize)> = Vec::with_capacity(nodes.len());
+    let mut all_fields = true;
+    for (i, n) in nodes.iter().enumerate() {
+        if !isa(n, &c.field)? {
+            all_fields = false;
+            break;
+        }
+        match n.getattr(intern!(py, "_sort_key"))?.extract::<(i64, i64)>() {
+            Ok(k) => int_keys.push((k, i)),
+            Err(_) => {
+                all_fields = false;
+                break;
+            }
+        }
+    }
+    if all_fields {
+        int_keys.sort_by_key(|k| k.0);
+        return Ok(int_keys.into_iter().map(|(_, i)| i).collect());
+    }
     let mut pctx = None;
     let list = PyList::empty(py);
     for (i, n) in nodes.iter().enumerate() {
@@ -275,7 +299,7 @@ pub fn insert<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
         // ctx.sql(stmt or SQL('INSERT'))
         let mut stmt = None;
         if has_conflict {
-            let conflict_statement = ctx.state.settings.conflict_statement.clone();
+            let conflict_statement = ctx.dialect.conflict_statement.clone();
             let s = conflict_hook(ctx, &conflict_statement, &on_conflict, node)?;
             if s.is_truthy()? {
                 stmt = Some(s);
@@ -318,7 +342,7 @@ pub fn insert<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
         node.setattr(intern!(py, "_query_type"), query_type)?;
 
         if has_conflict {
-            let conflict_update = ctx.state.settings.conflict_update.clone();
+            let conflict_update = ctx.dialect.conflict_update.clone();
             let upd = conflict_hook(ctx, &conflict_update, &on_conflict, node)?;
             if !upd.is_none() {
                 ctx.literal(" ");
@@ -420,11 +444,16 @@ fn generate_insert<'py>(
             // Add any columns present in the default data that are not
             // accounted for by the dictionary of row data:
             //   for col in (set(defaults) - set(accum)): accum.append(col)
-            let column_set = PySet::new(py, &accum)?;
-            let default_set = PySet::new(py, defaults.try_iter()?.collect::<PyResult<Vec<_>>>()?)?;
-            let extra = default_set.sub(&column_set)?;
-            for col in extra.try_iter()? {
-                accum.push(col?);
+            // Skipped when there are no defaults: the difference is empty and
+            // building the sets would hash every Field through Python.
+            if defaults.len()? > 0 {
+                let column_set = PySet::new(py, &accum)?;
+                let default_set =
+                    PySet::new(py, defaults.try_iter()?.collect::<PyResult<Vec<_>>>()?)?;
+                let extra = default_set.sub(&column_set)?;
+                for col in extra.try_iter()? {
+                    accum.push(col?);
+                }
             }
             sorted_nodes(ctx, accum)?
         };
@@ -447,29 +476,31 @@ fn generate_insert<'py>(
         clean
     };
 
-    let fk_fields = PySet::empty(py)?;
-    let nullable_columns = PySet::empty(py)?;
+    // Per-column facts, indexed like `cols` (peewee keeps sets of columns;
+    // membership by index is equivalent since columns are distinct objects).
+    let mut is_fk: Vec<bool> = Vec::with_capacity(cols.len());
+    let mut is_nullable: Vec<bool> = Vec::with_capacity(cols.len());
     let mut lookups: Vec<Vec<Bound<'py, PyAny>>> = Vec::with_capacity(cols.len());
     let mut converters: Vec<Option<Bound<'py, PyAny>>> = Vec::with_capacity(cols.len());
     for column in &cols {
-        let mut keys = vec![column.clone(), column.getattr(intern!(py, "name"))?];
+        let name = column.getattr(intern!(py, "name"))?;
+        let mut keys = vec![column.clone(), name.clone()];
         let mut converter = None;
+        let mut fk = false;
+        let mut nullable = false;
         if isa(column, &c.field)? {
-            let name = column.getattr(intern!(py, "name"))?;
             let column_name = column.getattr(intern!(py, "column_name"))?;
             if !name.eq(&column_name)? {
                 keys.push(column_name);
             }
-            if column.getattr(intern!(py, "null"))?.is_truthy()? {
-                nullable_columns.add(column)?;
-            }
-            if isa(column, &c.foreign_key_field)? {
-                fk_fields.add(column)?;
-            }
+            nullable = column.getattr(intern!(py, "null"))?.is_truthy()?;
+            fk = isa(column, &c.foreign_key_field)?;
             converter = Some(column.getattr(intern!(py, "db_value"))?);
         }
         lookups.push(keys);
         converters.push(converter);
+        is_fk.push(fk);
+        is_nullable.push(nullable);
     }
 
     basic::enclosed_items(ctx, &cols)?;
@@ -485,11 +516,26 @@ fn generate_insert<'py>(
             },
         };
         let is_dict = isa(&row, &c.mapping)?;
+        let exact_dict = if row.is_exact_instance_of::<PyDict>() {
+            Some(row.cast::<PyDict>()?)
+        } else {
+            None
+        };
         let mut values = Vec::with_capacity(cols.len());
         for (i, column) in cols.iter().enumerate() {
             // try: val = row[...] except (KeyError, IndexError): <defaults>
             let mut val: Option<Bound<'py, PyAny>> = None;
-            if is_dict {
+            if let Some(d) = exact_dict {
+                // Plain dict: PyDict_GetItem answers "missing" without raising
+                // KeyError. Same semantics as row[lookup] for an exact dict
+                // (no __missing__), a fraction of the cost.
+                for lookup in &lookups[i] {
+                    if let Some(v) = d.get_item(lookup)? {
+                        val = Some(v);
+                        break;
+                    }
+                }
+            } else if is_dict {
                 // Try each possible key (column, field name, column name);
                 // a KeyError moves on to the next one.
                 for lookup in &lookups[i] {
@@ -521,7 +567,7 @@ fn generate_insert<'py>(
                             v = v.call0()?;
                         }
                         v
-                    } else if nullable_columns.contains(column)? {
+                    } else if is_nullable[i] {
                         py.None().into_bound(py)
                     } else {
                         let name = column.getattr(intern!(py, "name"))?;
@@ -533,7 +579,7 @@ fn generate_insert<'py>(
                 }
             };
 
-            if !isa(&val, &c.node)? || (isa(&val, &c.model)? && fk_fields.contains(column)?) {
+            if !isa(&val, &c.node)? || (is_fk[i] && isa(&val, &c.model)?) {
                 values.push(Cell::Val(val, converters[i].clone()));
             } else {
                 values.push(Cell::Node(val));

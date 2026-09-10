@@ -92,21 +92,14 @@ pub fn value_literals<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyRe
 // so write them verbatim with the state's quote characters.
 pub fn entity<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = ctx.py;
-    let path: Vec<String> = node.getattr(intern!(py, "_path"))?.extract()?;
-    let q = ctx
-        .state
-        .settings
-        .quote
-        .clone()
-        .unwrap_or_else(|| "\"\"".to_string());
-    let mut chars = q.chars();
-    let (open, close) = (chars.next().unwrap_or('"'), chars.next().unwrap_or('"'));
-    for (i, part) in path.iter().enumerate() {
+    let (open, close) = ctx.dialect.quote;
+    for (i, part) in node.getattr(intern!(py, "_path"))?.try_iter()?.enumerate() {
         if i > 0 {
             ctx.sql.push('.');
         }
         ctx.sql.push(open);
-        ctx.sql.push_str(part);
+        ctx.sql
+            .push_str(part?.cast::<pyo3::types::PyString>()?.to_str()?);
         ctx.sql.push(close);
     }
     Ok(())
@@ -180,16 +173,14 @@ pub fn bitwise_negated<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyR
 
 /// `ctx.state.operations.get(op, op)` when the dialect maps operators.
 pub fn map_operation(ctx: &Ctx<'_>, op: &str) -> PyResult<String> {
-    match &ctx.state.settings.operations {
-        Some(ops) => {
-            let ops = ops.bind(ctx.py);
-            match ops.call_method1("get", (op,))? {
-                v if v.is_none() => Ok(op.to_string()),
-                v => v.extract(),
+    if let Some(ops) = &ctx.dialect.operations {
+        if let Some(v) = ops.bind(ctx.py).get_item(op)? {
+            if !v.is_none() {
+                return v.extract();
             }
         }
-        None => Ok(op.to_string()),
     }
+    Ok(op.to_string())
 }
 
 // Cast.__sql__
@@ -208,7 +199,7 @@ pub fn ordering<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<(
     let py = ctx.py;
     let nulls = node.getattr(intern!(py, "nulls"))?;
     let has_nulls = nulls.is_truthy()?;
-    let nulls_ordering = ctx.state.settings.nulls_ordering;
+    let nulls_ordering = ctx.dialect.nulls_ordering;
     if has_nulls && !nulls_ordering {
         // ctx.sql(self._null_ordering_case(self.nulls)).literal(', ')
         let case = node.call_method1("_null_ordering_case", (&nulls,))?;
@@ -276,8 +267,26 @@ pub fn expression<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult
 }
 
 /// `ctx.as_new().parse(rhs)[0] == '()'`
+///
+/// Fast path: a plain Python collection whose items are all non-Node values
+/// renders as one placeholder per item, so it is empty iff it has no items.
+/// That avoids rendering (and converting) every IN value twice.
 fn rhs_renders_empty<'py>(ctx: &Ctx<'py>, rhs: &Bound<'py, PyAny>) -> PyResult<bool> {
-    let mut probe = ctx.as_new();
+    if is_multi(ctx, rhs)? {
+        let mut n = 0usize;
+        let mut plain = true;
+        for item in rhs.try_iter()? {
+            n += 1;
+            if isa(&item?, &ctx.c.node)? {
+                plain = false;
+                break;
+            }
+        }
+        if plain {
+            return Ok(n == 0);
+        }
+    }
+    let mut probe = ctx.as_new()?;
     probe.sql(rhs)?;
     Ok(probe.sql == "()")
 }

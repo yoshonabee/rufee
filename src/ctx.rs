@@ -5,6 +5,8 @@
 //! writes `(` and leaving it writes `)`.
 
 use pyo3::intern;
+use std::collections::HashMap;
+
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 
@@ -12,20 +14,14 @@ use crate::classes::{classes, isa, Classes, SCOPE_COLUMN, SCOPE_NORMAL};
 use crate::nodes;
 use crate::Unsupported;
 
-/// The subset of `State.settings` the renderer reads. Everything peewee's
-/// `get_context_options()` produces plus the per-node flags.
-#[derive(Clone)]
-pub struct Settings {
-    pub converter: Option<Py<PyAny>>, // None ⇔ falsy (None / False)
-    pub in_expr: bool,
-    pub in_function: bool,
-    pub function_arg_count: Option<usize>,
-    pub subquery: bool,
-    pub is_fk_expr: bool,
-    pub value_literals: bool,
+/// The dialect part of `State.settings`: everything `get_context_options()`
+/// produces. Fixed for the whole render, so it lives on the `Ctx`, not on the
+/// per-scope state, and is never cloned.
+pub struct Dialect {
     pub param: Option<String>,
-    pub quote: Option<String>,
-    pub operations: Option<Py<PyAny>>,
+    /// `quote` as (open, close) characters; peewee default `""`.
+    pub quote: (char, char),
+    pub operations: Option<Py<PyDict>>,
     pub nulls_ordering: bool,
     pub limit_max: Option<Py<PyAny>>,
     pub for_update: bool,
@@ -35,6 +31,19 @@ pub struct Settings {
     /// The original kwargs dict, so a peewee `Context` with identical settings
     /// can be constructed when a Python hook has to be called with a context.
     pub raw: Py<PyDict>,
+}
+
+/// The per-scope part of `State.settings`: the flags nodes set with
+/// `with ctx(...)`. Cloned on every scope change, so it is kept tiny.
+#[derive(Clone, Default)]
+pub struct Flags {
+    pub converter: Option<Py<PyAny>>, // None ⇔ falsy (None / False)
+    pub in_expr: bool,
+    pub in_function: bool,
+    pub function_arg_count: Option<usize>,
+    pub subquery: bool,
+    pub is_fk_expr: bool,
+    pub value_literals: bool,
 }
 
 fn opt_obj(d: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<Py<PyAny>>> {
@@ -58,27 +67,27 @@ fn opt_str(d: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<String>> {
     }
 }
 
-impl Settings {
+impl Dialect {
     pub fn from_dict(d: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let function_arg_count = match d.get_item("function_arg_count")? {
-            Some(v) if !v.is_none() => Some(v.extract::<usize>()?),
-            _ => None,
-        };
         let compound_select_parentheses = match d.get_item("compound_select_parentheses")? {
             Some(v) if !v.is_none() => Some(v.extract::<i64>()?),
             _ => None,
         };
-        Ok(Settings {
-            converter: opt_obj(d, "converter")?,
-            in_expr: opt_bool(d, "in_expr")?,
-            in_function: opt_bool(d, "in_function")?,
-            function_arg_count,
-            subquery: opt_bool(d, "subquery")?,
-            is_fk_expr: opt_bool(d, "is_fk_expr")?,
-            value_literals: opt_bool(d, "value_literals")?,
+        let quote = match opt_str(d, "quote")? {
+            Some(q) => {
+                let mut it = q.chars();
+                (it.next().unwrap_or('"'), it.next().unwrap_or('"'))
+            }
+            None => ('"', '"'),
+        };
+        let operations = match d.get_item("operations")? {
+            Some(v) if v.is_truthy()? => Some(v.cast_into::<PyDict>()?.unbind()),
+            _ => None,
+        };
+        Ok(Dialect {
             param: opt_str(d, "param")?,
-            quote: opt_str(d, "quote")?,
-            operations: opt_obj(d, "operations")?,
+            quote,
+            operations,
             nulls_ordering: opt_bool(d, "nulls_ordering")?,
             limit_max: opt_obj(d, "limit_max")?,
             for_update: opt_bool(d, "for_update")?,
@@ -90,11 +99,29 @@ impl Settings {
     }
 }
 
+impl Flags {
+    pub fn from_dict(d: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let function_arg_count = match d.get_item("function_arg_count")? {
+            Some(v) if !v.is_none() => Some(v.extract::<usize>()?),
+            _ => None,
+        };
+        Ok(Flags {
+            converter: opt_obj(d, "converter")?,
+            in_expr: opt_bool(d, "in_expr")?,
+            in_function: opt_bool(d, "in_function")?,
+            function_arg_count,
+            subquery: opt_bool(d, "subquery")?,
+            is_fk_expr: opt_bool(d, "is_fk_expr")?,
+            value_literals: opt_bool(d, "value_literals")?,
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct State {
     pub scope: u8,
     pub parentheses: bool,
-    pub settings: Settings,
+    pub flags: Flags,
 }
 
 /// A converter argument as peewee's `ctx.value()` sees it:
@@ -162,7 +189,13 @@ impl Over {
 /// peewee's `AliasManager`: a stack of `{source: alias}` dicts keyed with
 /// Python hashing (sources define `__hash__`/`__eq__`), one counter.
 pub struct AliasManager {
+    /// Source of truth: peewee semantics, keyed with Python hash/eq.
     mapping: Vec<Py<PyDict>>,
+    /// Identity fast path per level: object address -> alias. Sources are
+    /// looked up many times per query (every column reference) and each dict
+    /// lookup costs a Python-level `__hash__` call; the same object always maps
+    /// to the same alias within a level.
+    by_id: Vec<HashMap<usize, String>>,
     current: usize, // 1-based like peewee's `_current_index`
     counter: usize,
 }
@@ -171,6 +204,7 @@ impl AliasManager {
     fn new(py: Python<'_>) -> Self {
         AliasManager {
             mapping: vec![PyDict::new(py).unbind()],
+            by_id: vec![HashMap::new()],
             current: 1,
             counter: 0,
         }
@@ -182,25 +216,49 @@ impl AliasManager {
 
     /// `alias_manager.add(source)` / `alias_manager[source]`.
     pub fn get(&mut self, source: &Bound<'_, PyAny>) -> PyResult<String> {
-        let m = self.map(source.py());
-        if let Some(a) = m.get_item(source)? {
-            return a.extract();
+        let key = source.as_ptr() as usize;
+        if let Some(a) = self.by_id[self.current - 1].get(&key) {
+            return Ok(a.clone());
         }
-        self.counter += 1;
-        let alias = format!("t{}", self.counter);
-        m.set_item(source, &alias)?;
+        let m = self.map(source.py());
+        let alias = match m.get_item(source)? {
+            Some(a) => a.extract::<String>()?,
+            None => {
+                self.counter += 1;
+                let alias = format!("t{}", self.counter);
+                m.set_item(source, &alias)?;
+                alias
+            }
+        };
+        self.by_id[self.current - 1].insert(key, alias.clone());
         Ok(alias)
     }
 
     /// `alias_manager[source] = alias`.
     pub fn set(&mut self, source: &Bound<'_, PyAny>, alias: &str) -> PyResult<()> {
-        self.map(source.py()).set_item(source, alias)
+        let m = self.map(source.py());
+        // If an *equal* (not identical) source already had a different alias,
+        // other objects' identity entries could now be stale; drop them.
+        if let Some(prev) = m.get_item(source)? {
+            if prev.extract::<String>()? != alias {
+                self.by_id[self.current - 1].clear();
+            }
+        }
+        m.set_item(source, alias)?;
+        self.by_id[self.current - 1].insert(source.as_ptr() as usize, alias.to_string());
+        Ok(())
     }
 
     pub fn push(&mut self, py: Python<'_>) {
         self.current += 1;
         if self.current > self.mapping.len() {
             self.mapping.push(PyDict::new(py).unbind());
+            self.by_id.push(HashMap::new());
+        } else {
+            // peewee's pop() leaves the old dict in place but a fresh push()
+            // must not see stale identity entries... it does see the stale
+            // *dict* entries though (peewee never clears them), so keep both
+            // views consistent by leaving by_id alone as well.
         }
     }
 
@@ -220,6 +278,7 @@ pub struct Ctx<'py> {
     pub c: &'static Classes,
     pub sql: String,
     pub values: Vec<Py<PyAny>>,
+    pub dialect: Dialect,
     pub state: State,
     stack: Vec<State>,
     pub aliases: AliasManager,
@@ -237,31 +296,34 @@ impl<'py> Ctx<'py> {
             c: classes(py)?,
             sql: String::with_capacity(256),
             values: Vec::new(),
+            dialect: Dialect::from_dict(settings)?,
             state: State {
                 scope,
                 parentheses,
-                settings: Settings::from_dict(settings)?,
+                flags: Flags::from_dict(settings)?,
             },
             stack: Vec::new(),
             aliases: AliasManager::new(py),
         })
     }
 
-    /// `Context.as_new()`: same settings, fresh everything else.
-    pub fn as_new(&self) -> Ctx<'py> {
-        Ctx {
+    /// `Context.as_new()`: same settings, fresh everything else. peewee passes
+    /// the *current* settings dict, so the flags carry over too.
+    pub fn as_new(&self) -> PyResult<Ctx<'py>> {
+        Ok(Ctx {
             py: self.py,
             c: self.c,
             sql: String::with_capacity(64),
             values: Vec::new(),
+            dialect: Dialect::from_dict(self.dialect.raw.bind(self.py))?,
             state: State {
                 scope: SCOPE_NORMAL,
                 parentheses: false,
-                settings: self.state.settings.clone(),
+                flags: self.state.flags.clone(),
             },
             stack: Vec::new(),
             aliases: AliasManager::new(self.py),
-        }
+        })
     }
 
     #[inline]
@@ -280,35 +342,34 @@ impl<'py> Ctx<'py> {
     where
         F: FnOnce(&mut Ctx<'py>) -> PyResult<()>,
     {
-        let prev = self.state.clone();
         let mut st = State {
-            scope: over.scope.unwrap_or(prev.scope),
+            scope: over.scope.unwrap_or(self.state.scope),
             parentheses: over.parentheses.unwrap_or(false),
-            settings: prev.settings.clone(),
+            flags: self.state.flags.clone(),
         };
         if let Some(v) = over.converter {
-            st.settings.converter = v;
+            st.flags.converter = v;
         }
         if let Some(v) = over.in_expr {
-            st.settings.in_expr = v;
+            st.flags.in_expr = v;
         }
         if let Some(v) = over.in_function {
-            st.settings.in_function = v;
+            st.flags.in_function = v;
         }
         if let Some(v) = over.function_arg_count {
-            st.settings.function_arg_count = v;
+            st.flags.function_arg_count = v;
         }
         if let Some(v) = over.subquery {
-            st.settings.subquery = v;
+            st.flags.subquery = v;
         }
         if let Some(v) = over.is_fk_expr {
-            st.settings.is_fk_expr = v;
+            st.flags.is_fk_expr = v;
         }
         if let Some(v) = over.value_literals {
-            st.settings.value_literals = v;
+            st.flags.value_literals = v;
         }
+        let prev = std::mem::replace(&mut self.state, st);
         self.stack.push(prev);
-        self.state = st;
         if self.state.parentheses {
             self.sql.push('(');
         }
@@ -339,14 +400,7 @@ impl<'py> Ctx<'py> {
 
     /// `ctx.sql(Entity(*path))` without building the Python node.
     pub fn entity(&mut self, path: &[&str]) -> PyResult<()> {
-        let q = self
-            .state
-            .settings
-            .quote
-            .clone()
-            .unwrap_or_else(|| "\"\"".to_string());
-        let mut chars = q.chars();
-        let (open, close) = (chars.next().unwrap_or('"'), chars.next().unwrap_or('"'));
+        let (open, close) = self.dialect.quote;
         let mut first = true;
         for part in path.iter().filter(|p| !p.is_empty()) {
             if !first {
@@ -355,10 +409,23 @@ impl<'py> Ctx<'py> {
             first = false;
             self.sql.push(open);
             // Entity.__init__ escapes embedded double quotes.
-            self.sql.push_str(&part.replace('"', "\"\""));
+            if part.contains('"') {
+                self.sql.push_str(&part.replace('"', "\"\""));
+            } else {
+                self.sql.push_str(part);
+            }
             self.sql.push(close);
         }
         Ok(())
+    }
+
+    /// Write the parameter placeholder (`ctx.state.param or '?'`).
+    #[inline]
+    pub fn placeholder(&mut self) {
+        match &self.dialect.param {
+            Some(p) => self.sql.push_str(p),
+            None => self.sql.push('?'),
+        }
     }
 
     /// `ctx.value(value, converter, add_param)`.
@@ -371,7 +438,7 @@ impl<'py> Ctx<'py> {
         let py = self.py;
         let converted: Bound<'py, PyAny> = match converter {
             Converter::Fn(f) => f.call1((value,))?,
-            Converter::Default => match &self.state.settings.converter {
+            Converter::Default => match &self.state.flags.converter {
                 Some(f) => f.bind(py).call1((value,))?,
                 None => value.clone(),
             },
@@ -386,17 +453,14 @@ impl<'py> Ctx<'py> {
                 ctx.sql(&converted)
             });
         }
-        if self.state.settings.value_literals {
+        if self.state.flags.value_literals {
             let lit = query_val_transform(&converted, c)?;
             self.sql.push_str(&lit);
             return Ok(());
         }
         self.values.push(converted.unbind());
         if add_param {
-            match &self.state.settings.param {
-                Some(p) => self.sql.push_str(p),
-                None => self.sql.push('?'),
-            }
+            self.placeholder();
         }
         Ok(())
     }
@@ -409,14 +473,23 @@ impl<'py> Ctx<'py> {
         F: FnOnce(&Bound<'py, PyAny>) -> PyResult<()>,
     {
         let py = self.py;
-        let pctx = self
-            .c
-            .context
-            .bind(py)
-            .call((), Some(self.state.settings.raw.bind(py)))?;
+        // Rebuild the settings dict peewee would hold at this point: dialect
+        // options plus the current per-scope flags.
+        let kwargs = self.dialect.raw.bind(py).copy()?;
+        let fl = &self.state.flags;
+        match &fl.converter {
+            Some(c) => kwargs.set_item("converter", c.bind(py))?,
+            None => kwargs.set_item("converter", py.None())?,
+        }
+        kwargs.set_item("in_expr", fl.in_expr)?;
+        kwargs.set_item("in_function", fl.in_function)?;
+        kwargs.set_item("function_arg_count", fl.function_arg_count)?;
+        kwargs.set_item("subquery", fl.subquery)?;
+        kwargs.set_item("is_fk_expr", fl.is_fk_expr)?;
+        kwargs.set_item("value_literals", fl.value_literals)?;
+        let pctx = self.c.context.bind(py).call((), Some(&kwargs))?;
         let state_cls = py.import("peewee")?.getattr(intern!(py, "State"))?;
-        let kwargs = self.state.settings.raw.bind(py);
-        let st = state_cls.call((self.state.scope, self.state.parentheses), Some(kwargs))?;
+        let st = state_cls.call((self.state.scope, self.state.parentheses), Some(&kwargs))?;
         pctx.setattr("state", st)?;
         f(&pctx)?;
         let (sql, params): (String, Vec<Py<PyAny>>) = pctx.call_method0("query")?.extract()?;

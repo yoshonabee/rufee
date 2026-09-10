@@ -242,8 +242,8 @@ pub fn model_alias<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResul
 // Model.__sql__ (an *instance* used as a value)
 pub fn model_instance<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = ctx.py;
-    if ctx.state.settings.is_fk_expr {
-        if let Some(conv) = ctx.state.settings.converter.clone() {
+    if ctx.state.flags.is_fk_expr {
+        if let Some(conv) = ctx.state.flags.converter.clone() {
             // try: ctx.sql(Value(self, converter=ctx.state.converter))
             // except (TypeError, ValueError): pass
             let conv = conv.bind(py);

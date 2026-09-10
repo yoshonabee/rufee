@@ -33,3 +33,6 @@ features = ["pyo3/extension-module"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "slow: benchmark / long-running tests (still run by default; deselect with -m 'not slow')",
+]

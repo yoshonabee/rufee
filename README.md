@@ -13,7 +13,9 @@ renderer: a Rust walker reads the existing Python node tree and emits the SQL
 string and parameter list.
 
 Status: **renders peewee 3.17.9's entire test-suite byte-identically** (strict
-mode 100% on sqlite and MySQL, see below). Not yet released; API may still move.
+mode 100% on sqlite and MySQL, see below). Tagged `v0.1.0`, not on PyPI yet —
+install from a wheel or from source, see
+[`docs/installation.md`](docs/installation.md). The API may still move.
 
 ## How it plugs in
 
@@ -41,6 +43,11 @@ class MyDatabase(MySQLDatabase):
 
 Everything else (`Model.select()`, `.dicts()`, `insert_many`, `query.sql()`,
 `db.execute_sql(raw)`) keeps working unchanged.
+
+Full instructions — wheels, building from source, the Docker recipe, the
+`RUFEE_MODE` / `RUFEE_FALLBACK` / `RUFEE_FORCE` knobs, how to verify the install
+and how to roll it out through shadow mode — are in
+[`docs/installation.md`](docs/installation.md).
 
 ## Design
 
@@ -191,9 +198,11 @@ Ordered. Done items are kept for the record.
 7. ~~**P2 nodes**~~ Done: subqueries as sources, CTE, `Window`, `ValuesList`,
    `CompoundSelectQuery`, `BitField` flags. Every node type peewee's suite
    exercises now renders in Rust.
-8. **Docs**: user guide (installation, `context_class`, shadow mode, logging),
-   contributor guide (how to add a node type: Rust match arm + hypothesis rule
-   + which peewee tests it unlocks).
+8. **Docs**: installation / user guide done — [`docs/installation.md`](docs/installation.md)
+   (install, `context_class`, configuration, verification, shadow rollout,
+   version gate, troubleshooting). Still to write: a contributor guide (how to
+   add a node type: Rust match arm + hypothesis rule + which peewee tests it
+   unlocks).
 9. ~~**Performance pass**~~ Done. Join select went from 14.7 to 9.8 µs
    (7.3x → 11.0x), `insert_many` ×100 from 275 to 195 µs, by: keeping the
    dialect options off the per-scope state so a scope change clones seven

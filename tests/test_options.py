@@ -108,12 +108,14 @@ OPERATION_CASES = {
     "ILIKE via contains": (lambda: User.username.contains("a"), "LIKE", "LIKE"),
     "LIKE via %": (lambda: User.username % "a", "GLOB", "LIKE BINARY"),
     "LIKE via like()": (lambda: User.username.like("a"), "GLOB", "LIKE BINARY"),
-    # peewee quirk: OP.XOR is the literal "#", so MySQL's operations["XOR"] = "XOR"
-    # never matches and "#" is emitted on both dialects. rufee must reproduce it.
-    "XOR via ^": (lambda: User.score ^ 1, "#", "#"),
+    # peewee 4 maps OP.XOR through the dialect's operations table: sqlite keeps
+    # the literal "#", MySQL renders XOR.
+    "XOR via ^": (lambda: User.score ^ 1, "#", "XOR"),
     "REGEXP": (lambda: User.username.regexp("a"), "REGEXP", "REGEXP BINARY"),
     "IREGEXP": (lambda: User.username.iregexp("a"), "IREGEXP", "REGEXP"),
-    "CONCAT": (lambda: User.username.concat("a"), "||", "||"),
+    # MySQL renders CONCAT(a, b) since peewee 4.5 (it no longer sets
+    # PIPES_AS_CONCAT); checked separately below.
+    "CONCAT": (lambda: User.username.concat("a"), "||", None),
     "NOT IN": (lambda: User.score.not_in([1, 2]), "NOT IN", "NOT IN"),
     "IS NOT": (lambda: User.score.is_null(False), "IS NOT", "IS NOT"),
 }
@@ -124,8 +126,15 @@ def test_operations_mapping(name):
     build, sqlite_token, mysql_token = OPERATION_CASES[name]
     for opts, token in ((SQLITE, sqlite_token), (MYSQL, mysql_token)):
         sql, _ = both(User.select().where(build()), opts)
+        if token is None:
+            continue
         where = sql.split(" WHERE ", 1)[1]
         assert f" {token} " in where, (name, where)
+
+
+def test_concat_mysql_is_a_function():
+    sql, _ = both(User.select().where(User.username.concat("a") == "ba"), MYSQL)
+    assert "CONCAT(`t1`.`username`, %s)" in sql
 
 
 def test_operations_custom_table():

@@ -18,7 +18,7 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Topic :: Database",
 ]
-dependencies = ["peewee>=3.17.3,<3.18"]
+dependencies = ["peewee>=4.5.3,<4.6"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "hypothesis>=6", "pymysql>=1.1", "maturin>=1.15,<2.0"]

@@ -20,7 +20,7 @@ _PeeweeState = peewee.State
 
 log = logging.getLogger("rufee")
 
-SUPPORTED_PEEWEE = "3.17."
+SUPPORTED_PEEWEE = "4.5."
 
 MODE_RUST = "rust"      # render with Rust, fall back to peewee when unsupported
 MODE_SHADOW = "shadow"  # render both, log mismatches, return peewee's result

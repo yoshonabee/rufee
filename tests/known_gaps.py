@@ -11,17 +11,8 @@ non-strict xfails and are removed once every gap is fixed.
 """
 
 # Gap categories. Keep these in sync with the README TODO.
-ORDERING = "Ordering.collate() renders COLLATE before the direction"
-COMPOUND = "compound select parentheses / alias scoping changed"
-VALUE_LITERALS = "value_literals escapes single quotes"
-
-KNOWN_GAPS = {
-    "test_differential.py::test_representative_queries[ordering-sqlite]": ORDERING,
-    "test_differential.py::test_representative_queries[ordering-mysql]": ORDERING,
-    "test_differential.py::test_representative_queries[union_all_intersect-sqlite]": COMPOUND,
-    "test_options.py::test_compound_select_parentheses_modes[sqlite-0]": COMPOUND,
-    "test_options.py::test_compound_select_parentheses_modes[mysql-0]": COMPOUND,
-    "test_options.py::test_value_literals_types": VALUE_LITERALS,
+# All tracked gaps are fixed; add new ones here with a category constant.
+KNOWN_GAPS: dict[str, str] = {
 }
 
 FLAKY_GAPS = {

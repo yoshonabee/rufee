@@ -7,6 +7,7 @@ everything else.
 """
 
 import datetime
+import re
 
 import peewee
 import pytest
@@ -342,7 +343,12 @@ def test_compound_select_parentheses_mysql_default():
 
 @pytest.mark.parametrize(
     "mode",
-    [peewee.CSQ_PARENTHESES_NEVER, peewee.CSQ_PARENTHESES_ALWAYS, peewee.CSQ_PARENTHESES_UNNESTED],
+    [
+        peewee.CSQ_PARENTHESES_NEVER,
+        peewee.CSQ_PARENTHESES_ALWAYS,
+        peewee.CSQ_PARENTHESES_UNNESTED,
+        peewee.CSQ_PARENTHESES_GROUPED,
+    ],
 )
 @pytest.mark.parametrize("base", ["sqlite", "mysql"])
 def test_compound_select_parentheses_modes(mode, base):
@@ -352,6 +358,33 @@ def test_compound_select_parentheses_modes(mode, base):
     both(A - (B & C), opts)
     both((A | B).order_by(SQL("1")).limit(2).offset(1), opts)
     both(((A + B) | C).limit(3), opts)
+    # Members with their own ORDER BY / LIMIT, nested grouping.
+    both(A.order_by(User.id).limit(1) | B, opts)
+    both(A | B.order_by(User.id).limit(1).offset(2), opts)
+    both(A | (B - C), opts)
+    both(A & (B | C), opts)
+    both((A | B) & C, opts)
+    both(A - (B - C), opts)
+    both(A | (B | C).limit(2), opts)
+    # In an expression / as a lone function argument.
+    both(User.select(User.id).where(User.id.in_(A | (B | C))), opts)
+    both(User.select(User.id).where(User.id.in_(A - (B | C))), opts)
+    both(User.select(User.id).where(peewee.fn.EXISTS(A | (B | C))), opts)
+    both(User.select(peewee.fn.COALESCE(A | B, 0)), opts)
+
+
+def test_compound_aliases_self_union_and_correlated():
+    # A source repeated in several branches gets a fresh alias per branch,
+    # a correlated outer source keeps its alias in every branch.
+    for q in ((A | B) | A, A | (B | A)):
+        both(q, SQLITE)
+    lhs = Tweet.select(Tweet.id).where(Tweet.user == User.id)
+    rhs = Tweet.select(Tweet.id).where(Tweet.user == User.id).limit(1)
+    for compound in (lhs | rhs, lhs | (rhs | lhs), (lhs | rhs) | lhs):
+        q = User.select(User.id).where(peewee.fn.EXISTS(compound))
+        sql, _ = both(q, SQLITE)
+        assert set(re.findall(r'= "(t\d+)"\."id"', sql)) == {"t1"}
+        both(User.select(User.id).where(User.id.in_(compound)), MYSQL)
 
 
 def test_compound_select_parentheses_always_wraps_nested():

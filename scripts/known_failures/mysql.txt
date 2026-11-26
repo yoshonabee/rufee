@@ -1,9 +1,0 @@
-tests.hybrid.TestHybridProperties.test_hybrid_model_alias  # fail: AssertionError: Tuples differ: ('0',) != ('huey cat',)
-tests.hybrid.TestHybridProperties.test_hybrid_subclass_model_alias  # fail: AssertionError: Tuples differ: ('0',) != ('huey cat',)
-tests.hybrid.TestHybridProperties.test_string_fields  # error: PersonDoesNotExist: <Model: Person> instance matching query does not exist:
-tests.model_sql.TestModelSQL.test_insert_empty_applies_defaults  # fail: AssertionError: 'INSERT INTO "dflt" DEFAULT VALUES' != 'INSERT INTO "dflt" ("a", "b") VALUES (?, ?)'
-tests.models.TestCTEIntegration.test_recursive_cte  # error: OperationalError: (1292, "Truncated incorrect DOUBLE value: 'c31'")
-tests.models.TestCTEIntegration.test_recursive_cte_docs_example  # error: OperationalError: (1292, "Truncated incorrect DOUBLE value: 'root'")
-tests.models.TestDefaultValues.test_empty_insert_lands_defaults  # error: IntegrityError: NOT NULL constraint failed: default_only.a
-tests.models.TestLikeColumnValue.test_like_column_value  # fail: AssertionError: Lists differ: [] != [('u1', 'i am u1'), ('u1', 'u1 is my name'), ('u3', 'hey u3 is me')]
-tests.models.TestModelAPIs.test_insert_rowcount  # error: OperationalError: (1292, "Truncated incorrect DOUBLE value: 'u1'")

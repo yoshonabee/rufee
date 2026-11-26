@@ -1,2 +1,0 @@
-tests.model_sql.TestModelSQL.test_insert_empty_applies_defaults  # fail: AssertionError: 'INSERT INTO "dflt" DEFAULT VALUES' != 'INSERT INTO "dflt" ("a", "b") VALUES (?, ?)'
-tests.models.TestDefaultValues.test_empty_insert_lands_defaults  # error: IntegrityError: NOT NULL constraint failed: default_only.a

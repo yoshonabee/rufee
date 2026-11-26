@@ -262,6 +262,8 @@ def test_for_update_mysql():
         (dict(for_update="FOR UPDATE NOWAIT"), "FOR UPDATE NOWAIT"),
         (dict(for_update=True, of=User), "FOR UPDATE OF `t1`"),
         (dict(for_update="FOR SHARE", of=[User], nowait=True), "FOR SHARE OF `t1` NOWAIT"),
+        (dict(skip_locked=True), "FOR UPDATE SKIP LOCKED"),
+        (dict(for_update="FOR SHARE SKIP LOCKED", of=User), "FOR SHARE OF `t1` SKIP LOCKED"),
     ],
 )
 def test_for_update_variants(kwargs, suffix):
@@ -277,6 +279,42 @@ def test_for_update_option_alone_decides():
 def test_for_update_false_renders_nothing():
     sql, _ = both(User.select().for_update(False), MYSQL)
     assert "FOR" not in sql
+
+
+# --------------------------------------------------------------------------- conflict_statement / conflict_update
+
+
+def test_on_conflict_update_sqlite():
+    query = User.insert(username="a", score=1).on_conflict(
+        conflict_target=[User.username], update={User.score: User.score + 1}
+    )
+    sql, _ = both(query, SQLITE)
+    assert sql.endswith('ON CONFLICT ("username") DO UPDATE SET "score" = ("user"."score" + ?)')
+
+
+def test_on_conflict_do_nothing_keeps_target_sqlite():
+    # peewee 4.2.4: DO NOTHING keeps the conflict target and its WHERE.
+    query = User.insert(username="a", score=1).on_conflict(
+        action="NOTHING", conflict_target=[User.username], conflict_where=(User.score > 0)
+    )
+    sql, _ = both(query, SQLITE)
+    assert "ON CONFLICT (" in sql and "DO NOTHING" in sql
+
+
+def test_on_duplicate_key_update_mysql():
+    query = User.insert(username="a", score=1).on_conflict(
+        preserve=[User.username], update={User.score: User.score + 1}
+    )
+    sql, _ = both(query, MYSQL)
+    assert "ON DUPLICATE KEY UPDATE" in sql
+
+
+def test_on_conflict_without_conflict_statement_raises():
+    # peewee 4: OnConflict.get_conflict_statement raises InterfaceError when
+    # the context has no conflict_statement hook (query not bound to a db).
+    query = User.insert(username="a", score=1).on_conflict_ignore()
+    opts = dict(SQLITE, conflict_statement=None, conflict_update=None)
+    both_raise(query, opts, peewee.InterfaceError)
 
 
 # --------------------------------------------------------------------------- compound_select_parentheses

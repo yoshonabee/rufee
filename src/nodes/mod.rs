@@ -25,6 +25,7 @@ pub mod write;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
     FieldAlias,
+    StringExpression,
     CompositeKey,
     Field,
     Expression,
@@ -96,6 +97,7 @@ fn classify<'py>(ctx: &Ctx<'py>, obj: &Bound<'py, PyAny>) -> PyResult<Kind> {
             (&c.field_alias, Kind::FieldAlias),
             (&c.composite_key, Kind::CompositeKey),
             (&c.field, Kind::Field),
+            (&c.string_expression, Kind::StringExpression),
             (&c.expression, Kind::Expression),
             (&c.entity, Kind::Entity),
             (&c.sql, Kind::Sql),
@@ -160,6 +162,7 @@ pub fn render<'py>(ctx: &mut Ctx<'py>, obj: &Bound<'py, PyAny>) -> PyResult<()> 
         Kind::FieldAlias => source::field_alias(ctx, obj),
         Kind::CompositeKey => source::composite_key(ctx, obj),
         Kind::Field => source::field(ctx, obj),
+        Kind::StringExpression => basic::string_expression(ctx, obj),
         Kind::Expression => basic::expression(ctx, obj),
         Kind::Entity => basic::entity(ctx, obj),
         Kind::Sql => basic::sql(ctx, obj),

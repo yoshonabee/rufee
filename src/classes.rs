@@ -28,6 +28,7 @@ classes! {
     foreign_key_field = "peewee"::"ForeignKeyField",
     wrapped_node = "peewee"::"WrappedNode",
     expression = "peewee"::"Expression",
+    string_expression = "peewee"::"StringExpression",
     entity = "peewee"::"Entity",
     sql = "peewee"::"SQL",
     value = "peewee"::"Value",

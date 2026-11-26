@@ -228,6 +228,24 @@ pub fn ordering<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<(
 }
 
 // Expression.__sql__
+/// `StringExpression.__sql__`: on dialects with `use_concat_function`
+/// (MySQL, where `||` is logical OR), `a || b` renders as `CONCAT(a, b)`.
+pub fn string_expression<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = ctx.py;
+    if ctx.dialect.use_concat_function {
+        let op = node.getattr(intern!(py, "op"))?;
+        if op.eq(intern!(py, "||"))? {
+            let args = (
+                node.getattr(intern!(py, "lhs"))?,
+                node.getattr(intern!(py, "rhs"))?,
+            );
+            let func = ctx.c.function.bind(py).call1(("CONCAT", args))?;
+            return ctx.sql(&func);
+        }
+    }
+    expression(ctx, node)
+}
+
 pub fn expression<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = ctx.py;
     let c = ctx.c;

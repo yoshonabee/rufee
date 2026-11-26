@@ -95,19 +95,15 @@ pub fn value_literals<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyRe
     ctx.with(Over::default().value_literals(true), |ctx| ctx.sql(&inner))
 }
 
-// Entity.__sql__ — `_path` parts are already `"`-escaped by Entity.__init__,
-// so write them verbatim with the state's quote characters.
+// Entity.__sql__ — `_path` parts are stored raw; each is escaped (opening
+// quote char doubled into the quote pair) and wrapped at render time.
 pub fn entity<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = ctx.py;
-    let (open, close) = ctx.dialect.quote;
     for (i, part) in node.getattr(intern!(py, "_path"))?.try_iter()?.enumerate() {
         if i > 0 {
             ctx.sql.push('.');
         }
-        ctx.sql.push(open);
-        ctx.sql
-            .push_str(part?.cast::<pyo3::types::PyString>()?.to_str()?);
-        ctx.sql.push(close);
+        ctx.quoted_part(part?.cast::<pyo3::types::PyString>()?.to_str()?);
     }
     Ok(())
 }
@@ -215,12 +211,12 @@ pub fn ordering<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<(
     }
     let inner = node.getattr(intern!(py, "node"))?;
     ctx.sql(&inner)?;
-    let direction: String = node.getattr(intern!(py, "direction"))?.extract()?;
-    ctx.literal(&format!(" {}", direction));
     let collation = node.getattr(intern!(py, "collation"))?;
     if collation.is_truthy()? {
         ctx.literal(&format!(" COLLATE {}", collation.extract::<String>()?));
     }
+    let direction: String = node.getattr(intern!(py, "direction"))?.extract()?;
+    ctx.literal(&format!(" {}", direction));
     if has_nulls && nulls_ordering {
         ctx.literal(&format!(" NULLS {}", nulls.extract::<String>()?));
     }
@@ -228,6 +224,24 @@ pub fn ordering<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<(
 }
 
 // Expression.__sql__
+/// `StringExpression.__sql__`: on dialects with `use_concat_function`
+/// (MySQL, where `||` is logical OR), `a || b` renders as `CONCAT(a, b)`.
+pub fn string_expression<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = ctx.py;
+    if ctx.dialect.use_concat_function {
+        let op = node.getattr(intern!(py, "op"))?;
+        if op.eq(intern!(py, "||"))? {
+            let args = (
+                node.getattr(intern!(py, "lhs"))?,
+                node.getattr(intern!(py, "rhs"))?,
+            );
+            let func = ctx.c.function.bind(py).call1(("CONCAT", args))?;
+            return ctx.sql(&func);
+        }
+    }
+    expression(ctx, node)
+}
+
 pub fn expression<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = ctx.py;
     let c = ctx.c;
@@ -382,7 +396,10 @@ pub fn star<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
 pub fn qualified_names<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = ctx.py;
     let inner = node.getattr(intern!(py, "node"))?;
-    ctx.with(Over::default().scope(SCOPE_COLUMN), |ctx| ctx.sql(&inner))
+    // peewee 4: the scope is a constructor argument (SCOPE_COLUMN by default,
+    // SCOPE_NORMAL from `qualify_names()`).
+    let scope: u8 = node.getattr(intern!(py, "_scope"))?.extract()?;
+    ctx.with(Over::default().scope(scope), |ctx| ctx.sql(&inner))
 }
 
 // NamespaceAttribute.__sql__

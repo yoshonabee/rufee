@@ -7,6 +7,7 @@ everything else.
 """
 
 import datetime
+import re
 
 import peewee
 import pytest
@@ -262,6 +263,8 @@ def test_for_update_mysql():
         (dict(for_update="FOR UPDATE NOWAIT"), "FOR UPDATE NOWAIT"),
         (dict(for_update=True, of=User), "FOR UPDATE OF `t1`"),
         (dict(for_update="FOR SHARE", of=[User], nowait=True), "FOR SHARE OF `t1` NOWAIT"),
+        (dict(skip_locked=True), "FOR UPDATE SKIP LOCKED"),
+        (dict(for_update="FOR SHARE SKIP LOCKED", of=User), "FOR SHARE OF `t1` SKIP LOCKED"),
     ],
 )
 def test_for_update_variants(kwargs, suffix):
@@ -277,6 +280,42 @@ def test_for_update_option_alone_decides():
 def test_for_update_false_renders_nothing():
     sql, _ = both(User.select().for_update(False), MYSQL)
     assert "FOR" not in sql
+
+
+# --------------------------------------------------------------------------- conflict_statement / conflict_update
+
+
+def test_on_conflict_update_sqlite():
+    query = User.insert(username="a", score=1).on_conflict(
+        conflict_target=[User.username], update={User.score: User.score + 1}
+    )
+    sql, _ = both(query, SQLITE)
+    assert sql.endswith('ON CONFLICT ("username") DO UPDATE SET "score" = ("user"."score" + ?)')
+
+
+def test_on_conflict_do_nothing_keeps_target_sqlite():
+    # peewee 4.2.4: DO NOTHING keeps the conflict target and its WHERE.
+    query = User.insert(username="a", score=1).on_conflict(
+        action="NOTHING", conflict_target=[User.username], conflict_where=(User.score > 0)
+    )
+    sql, _ = both(query, SQLITE)
+    assert "ON CONFLICT (" in sql and "DO NOTHING" in sql
+
+
+def test_on_duplicate_key_update_mysql():
+    query = User.insert(username="a", score=1).on_conflict(
+        preserve=[User.username], update={User.score: User.score + 1}
+    )
+    sql, _ = both(query, MYSQL)
+    assert "ON DUPLICATE KEY UPDATE" in sql
+
+
+def test_on_conflict_without_conflict_statement_raises():
+    # peewee 4: OnConflict.get_conflict_statement raises InterfaceError when
+    # the context has no conflict_statement hook (query not bound to a db).
+    query = User.insert(username="a", score=1).on_conflict_ignore()
+    opts = dict(SQLITE, conflict_statement=None, conflict_update=None)
+    both_raise(query, opts, peewee.InterfaceError)
 
 
 # --------------------------------------------------------------------------- compound_select_parentheses
@@ -304,7 +343,12 @@ def test_compound_select_parentheses_mysql_default():
 
 @pytest.mark.parametrize(
     "mode",
-    [peewee.CSQ_PARENTHESES_NEVER, peewee.CSQ_PARENTHESES_ALWAYS, peewee.CSQ_PARENTHESES_UNNESTED],
+    [
+        peewee.CSQ_PARENTHESES_NEVER,
+        peewee.CSQ_PARENTHESES_ALWAYS,
+        peewee.CSQ_PARENTHESES_UNNESTED,
+        peewee.CSQ_PARENTHESES_GROUPED,
+    ],
 )
 @pytest.mark.parametrize("base", ["sqlite", "mysql"])
 def test_compound_select_parentheses_modes(mode, base):
@@ -314,6 +358,33 @@ def test_compound_select_parentheses_modes(mode, base):
     both(A - (B & C), opts)
     both((A | B).order_by(SQL("1")).limit(2).offset(1), opts)
     both(((A + B) | C).limit(3), opts)
+    # Members with their own ORDER BY / LIMIT, nested grouping.
+    both(A.order_by(User.id).limit(1) | B, opts)
+    both(A | B.order_by(User.id).limit(1).offset(2), opts)
+    both(A | (B - C), opts)
+    both(A & (B | C), opts)
+    both((A | B) & C, opts)
+    both(A - (B - C), opts)
+    both(A | (B | C).limit(2), opts)
+    # In an expression / as a lone function argument.
+    both(User.select(User.id).where(User.id.in_(A | (B | C))), opts)
+    both(User.select(User.id).where(User.id.in_(A - (B | C))), opts)
+    both(User.select(User.id).where(peewee.fn.EXISTS(A | (B | C))), opts)
+    both(User.select(peewee.fn.COALESCE(A | B, 0)), opts)
+
+
+def test_compound_aliases_self_union_and_correlated():
+    # A source repeated in several branches gets a fresh alias per branch,
+    # a correlated outer source keeps its alias in every branch.
+    for q in ((A | B) | A, A | (B | A)):
+        both(q, SQLITE)
+    lhs = Tweet.select(Tweet.id).where(Tweet.user == User.id)
+    rhs = Tweet.select(Tweet.id).where(Tweet.user == User.id).limit(1)
+    for compound in (lhs | rhs, lhs | (rhs | lhs), (lhs | rhs) | lhs):
+        q = User.select(User.id).where(peewee.fn.EXISTS(compound))
+        sql, _ = both(q, SQLITE)
+        assert set(re.findall(r'= "(t\d+)"\."id"', sql)) == {"t1"}
+        both(User.select(User.id).where(User.id.in_(compound)), MYSQL)
 
 
 def test_compound_select_parentheses_always_wraps_nested():

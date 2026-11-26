@@ -4,7 +4,7 @@ import pytest
 import rufee
 from rufee import _context
 
-from known_gaps import FLAKY_GAPS, KNOWN_GAPS
+from known_gaps import KNOWN_GAPS
 
 
 def pytest_collection_modifyitems(config, items):
@@ -12,8 +12,6 @@ def pytest_collection_modifyitems(config, items):
         test_id = item.nodeid.split("tests/", 1)[-1]
         if test_id in KNOWN_GAPS:
             item.add_marker(pytest.mark.xfail(reason=KNOWN_GAPS[test_id], strict=True))
-        elif test_id in FLAKY_GAPS:
-            item.add_marker(pytest.mark.xfail(reason=FLAKY_GAPS[test_id], strict=False))
 
 
 @pytest.fixture(autouse=True)

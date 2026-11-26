@@ -99,15 +99,17 @@ pub fn select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
         ctx.literal("LATERAL ");
     }
     let is_subquery = ctx.state.flags.subquery;
-    let mut parens = is_subquery || ctx.scope() == SCOPE_SOURCE;
-    if ctx.state.flags.in_function && ctx.state.flags.function_arg_count == Some(1) {
-        parens = false;
-    }
+    // A real FROM/JOIN source. The SELECT list is SCOPE_SOURCE too, but it is
+    // flagged in_projection.
+    let is_source = ctx.scope() == SCOPE_SOURCE && !ctx.state.flags.in_projection;
     let over = Over::default()
         .scope(SCOPE_NORMAL)
         .converter(None)
+        .in_expr(false)
         .in_function(false)
-        .parens(parens)
+        .in_projection(false)
+        .bare_subquery(false)
+        .parens(subquery_parens(ctx))
         .subquery(true);
 
     ctx.with(over, |ctx| {
@@ -123,9 +125,10 @@ pub fn select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
                 ctx.literal(" ");
             }
         }
-        ctx.with(Over::default().scope(SCOPE_SOURCE), |ctx| {
-            sql_selection(ctx, node, is_subquery)
-        })?;
+        ctx.with(
+            Over::default().scope(SCOPE_SOURCE).in_projection(true),
+            |ctx| sql_selection(ctx, node, is_subquery && !is_source),
+        )?;
 
         let from_list = node.getattr(intern!(py, "_from_list"))?;
         if from_list.is_truthy()? {
@@ -174,8 +177,25 @@ pub fn select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
         Ok(())
     })?;
 
-    if ctx.state.flags.in_function
-        || (ctx.state.flags.in_expr && node.getattr(intern!(py, "_alias"))?.is_none())
+    apply_subquery_alias(ctx, node)
+}
+
+/// `SelectBase._subquery_parens`.
+fn subquery_parens(ctx: &Ctx<'_>) -> bool {
+    // bare_subquery is set by Function for its subquery_functions.
+    if ctx.state.flags.bare_subquery {
+        return false;
+    }
+    ctx.state.flags.subquery || ctx.scope() == SCOPE_SOURCE
+}
+
+/// `SelectBase._apply_subquery_alias`: no alias inside a function, or when
+/// unaliased in an expression or a SELECT list.
+fn apply_subquery_alias<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
+    let flags = &ctx.state.flags;
+    if flags.in_function
+        || ((flags.in_expr || flags.in_projection)
+            && node.getattr(intern!(ctx.py, "_alias"))?.is_none())
     {
         return Ok(());
     }

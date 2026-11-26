@@ -40,7 +40,13 @@ pub struct Flags {
     pub converter: Option<Py<PyAny>>, // None ⇔ falsy (None / False)
     pub in_expr: bool,
     pub in_function: bool,
-    pub function_arg_count: Option<usize>,
+    /// peewee 4: set by `Function` for a lone sub-select argument of a
+    /// `subquery_functions` member (EXISTS, ANY, ...), whose own parentheses
+    /// are then dropped.
+    pub bare_subquery: bool,
+    /// peewee 4: set while rendering a SELECT list, which is SCOPE_SOURCE
+    /// but holds operands, not FROM/JOIN sources.
+    pub in_projection: bool,
     pub subquery: bool,
     pub is_fk_expr: bool,
     pub value_literals: bool,
@@ -101,15 +107,12 @@ impl Dialect {
 
 impl Flags {
     pub fn from_dict(d: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let function_arg_count = match d.get_item("function_arg_count")? {
-            Some(v) if !v.is_none() => Some(v.extract::<usize>()?),
-            _ => None,
-        };
         Ok(Flags {
             converter: opt_obj(d, "converter")?,
             in_expr: opt_bool(d, "in_expr")?,
             in_function: opt_bool(d, "in_function")?,
-            function_arg_count,
+            bare_subquery: opt_bool(d, "bare_subquery")?,
+            in_projection: opt_bool(d, "in_projection")?,
             subquery: opt_bool(d, "subquery")?,
             is_fk_expr: opt_bool(d, "is_fk_expr")?,
             value_literals: opt_bool(d, "value_literals")?,
@@ -141,7 +144,8 @@ pub struct Over {
     pub converter: Option<Option<Py<PyAny>>>,
     pub in_expr: Option<bool>,
     pub in_function: Option<bool>,
-    pub function_arg_count: Option<Option<usize>>,
+    pub bare_subquery: Option<bool>,
+    pub in_projection: Option<bool>,
     pub subquery: Option<bool>,
     pub is_fk_expr: Option<bool>,
     pub value_literals: Option<bool>,
@@ -168,8 +172,12 @@ impl Over {
         self.in_function = Some(v);
         self
     }
-    pub fn function_arg_count(mut self, v: Option<usize>) -> Self {
-        self.function_arg_count = Some(v);
+    pub fn bare_subquery(mut self, v: bool) -> Self {
+        self.bare_subquery = Some(v);
+        self
+    }
+    pub fn in_projection(mut self, v: bool) -> Self {
+        self.in_projection = Some(v);
         self
     }
     pub fn subquery(mut self, v: bool) -> Self {
@@ -254,20 +262,20 @@ impl AliasManager {
         if self.current > self.mapping.len() {
             self.mapping.push(PyDict::new(py).unbind());
             self.by_id.push(HashMap::new());
-        } else {
-            // peewee's pop() leaves the old dict in place but a fresh push()
-            // must not see stale identity entries... it does see the stale
-            // *dict* entries though (peewee never clears them), so keep both
-            // views consistent by leaving by_id alone as well.
         }
     }
 
-    pub fn pop(&mut self) -> PyResult<()> {
+    pub fn pop(&mut self, py: Python<'_>) -> PyResult<()> {
         if self.current == 1 {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "Cannot pop() from empty alias manager.",
             ));
         }
+        // peewee 4 clears the level being left, so a later push() at the same
+        // depth starts empty (e.g. a second CTE numbers its sources afresh
+        // from the shared counter instead of reusing the first CTE's).
+        self.mapping[self.current - 1].bind(py).clear();
+        self.by_id[self.current - 1].clear();
         self.current -= 1;
         Ok(())
     }
@@ -356,8 +364,11 @@ impl<'py> Ctx<'py> {
         if let Some(v) = over.in_function {
             st.flags.in_function = v;
         }
-        if let Some(v) = over.function_arg_count {
-            st.flags.function_arg_count = v;
+        if let Some(v) = over.bare_subquery {
+            st.flags.bare_subquery = v;
+        }
+        if let Some(v) = over.in_projection {
+            st.flags.in_projection = v;
         }
         if let Some(v) = over.subquery {
             st.flags.subquery = v;
@@ -389,7 +400,7 @@ impl<'py> Ctx<'py> {
     {
         self.aliases.push(self.py);
         let r = body(self);
-        self.aliases.pop()?;
+        self.aliases.pop(self.py)?;
         r
     }
 
@@ -483,7 +494,8 @@ impl<'py> Ctx<'py> {
         }
         kwargs.set_item("in_expr", fl.in_expr)?;
         kwargs.set_item("in_function", fl.in_function)?;
-        kwargs.set_item("function_arg_count", fl.function_arg_count)?;
+        kwargs.set_item("bare_subquery", fl.bare_subquery)?;
+        kwargs.set_item("in_projection", fl.in_projection)?;
         kwargs.set_item("subquery", fl.subquery)?;
         kwargs.set_item("is_fk_expr", fl.is_fk_expr)?;
         kwargs.set_item("value_literals", fl.value_literals)?;

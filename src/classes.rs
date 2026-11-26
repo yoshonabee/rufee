@@ -59,6 +59,7 @@ classes! {
     noop_model_select = "peewee"::"NoopModelSelect",
     model_select = "peewee"::"ModelSelect",
     select_query = "peewee"::"SelectQuery",
+    select_base = "peewee"::"SelectBase",
     compound_select_query = "peewee"::"CompoundSelectQuery",
     update = "peewee"::"Update",
     insert = "peewee"::"Insert",

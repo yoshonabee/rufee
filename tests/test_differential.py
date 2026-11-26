@@ -775,6 +775,7 @@ UA = User.alias("ua")
 _sub = Tweet.select(Tweet.user).where(Tweet.likes > 3)
 _vl = ValuesList([(1, "a"), (2, "b")], columns=["id", "name"], alias="vl")
 _cte = Tweet.select(Tweet.user, Tweet.likes).cte("tw")
+_cte2 = User.select(User.id).where(User.is_active == True).cte("act")  # noqa: E712
 
 REPRESENTATIVE = {
     "select_all": User.select(),
@@ -839,6 +840,20 @@ REPRESENTATIVE = {
     "delete_where": Tweet.delete().where(Tweet.likes < 0),
     "delete_all": Note.delete(),
     "delete_table": Items.delete().where(Items.qty == 0),
+    # Sub-selects as operands and sources (peewee 4.2 - 4.5 changes).
+    "subquery_single_arg_function": User.select(fn.ABS(User.select(fn.MIN(User.id)))),
+    "subquery_exists_bare": User.select(fn.EXISTS(_sub)),
+    "subquery_case_value": Tweet.select(fn.SUM(Case(None, [(Tweet.likes > 1, Tweet.select(fn.MAX(Tweet.likes)))], 0))),
+    "subquery_select_column": User.select(User.username, Tweet.select(fn.COUNT(Tweet.id)).where(Tweet.user == User.id)),
+    "update_subquery_in_function": Tweet.update({Tweet.likes: fn.COALESCE(Note.select(fn.MAX(Note.rank)), 0)}),
+    "in_values_list": User.select().where(User.id.in_(ValuesList([(1,), (2,)]))),
+    "default_select_as_source": peewee.Select(from_list=[User.select().alias("us")], columns=[SQL("1")]),
+    "two_ctes": (
+        User.select(User.username, _cte.c.likes)
+        .join(_cte, on=(User.id == _cte.c.user))
+        .join(_cte2, on=(User.id == _cte2.c.id))
+        .with_cte(_cte, _cte2)
+    ),
 }
 
 

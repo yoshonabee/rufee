@@ -11,8 +11,6 @@ non-strict xfails and are removed once every gap is fixed.
 """
 
 # Gap categories. Keep these in sync with the README TODO.
-STATE = "peewee 4 State(scope, parentheses, settings) constructor"
-QUERY_TYPE = "Insert._query_type is a read-only property in peewee 4"
 OPERATORS = "MySQL CONCAT() instead of || (peewee 4.5)"
 ORDERING = "Ordering.collate() renders COLLATE before the direction"
 FOR_UPDATE = "FOR UPDATE was reworked (no _for_update_of etc.)"
@@ -20,17 +18,6 @@ COMPOUND = "compound select parentheses / alias scoping changed"
 VALUE_LITERALS = "value_literals escapes single quotes"
 
 KNOWN_GAPS = {
-    "test_shim.py::test_reference_render_survives_rebinding_peewee_context": STATE,
-    "test_shim.py::test_shadow_mode_param_mismatch_is_reported": STATE,
-    "test_shim.py::test_shadow_mode_returns_peewee_result_on_mismatch": STATE,
-    "test_shim.py::test_shadow_mode_silent_when_identical": STATE,
-    **{
-        f"test_differential.py::test_representative_queries[{name}-{dialect}]": QUERY_TYPE
-        for name in ("insert_from_query", "insert_ignore", "insert_kwargs",
-                     "insert_many_dicts", "insert_many_tuples", "insert_replace",
-                     "insert_table")
-        for dialect in ("sqlite", "mysql")
-    },
     "test_differential.py::test_representative_queries[concat-mysql]": OPERATORS,
     "test_options.py::test_concat_mysql_is_a_function": OPERATORS,
     "test_options.py::test_operations_mapping[CONCAT]": OPERATORS,

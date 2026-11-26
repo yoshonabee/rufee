@@ -1,6 +1,5 @@
 tests.db_tests.TestUserDefinedCallbacks.test_collation_decorator  # error: OperationalError: near "COLLATE": syntax error
 tests.db_tests.TestUserDefinedCallbacks.test_custom_collation  # error: OperationalError: near "COLLATE": syntax error
-tests.fields.TestBitFields.test_bigbit_field_bulk_create  # fail: AssertionError: 0 != 3
 tests.hybrid.TestHybridProperties.test_hybrid_model_alias  # fail: AssertionError: Tuples differ: ('0',) != ('huey cat',)
 tests.hybrid.TestHybridProperties.test_hybrid_subclass_model_alias  # fail: AssertionError: Tuples differ: ('0',) != ('huey cat',)
 tests.hybrid.TestHybridProperties.test_string_fields  # error: PersonDoesNotExist: <Model: Person> instance matching query does not exist:
@@ -10,25 +9,21 @@ tests.model_sql.TestModelCompoundSelect.test_limit  # fail: AssertionError: 'SEL
 tests.model_sql.TestModelCompoundSelect.test_union_same_model  # fail: AssertionError: 'SELE[68 chars]"alpha" AS "t2" UNION SELECT "t2"."alpha" FROM "alpha" AS "t2"' != 'SELE[68 chars]"alpha" AS "t2" UNION SELECT "t3"."alpha" FROM "alpha" A
 tests.model_sql.TestModelCompoundSelect.test_where  # fail: AssertionError: 'SELE[209 chars]SELECT "t2"."beta" FROM "beta" AS "t2" WHERE ("t2"."beta" > ?)' != 'SELE[209 chars]SELECT "t4"."beta" FROM "beta" AS "t4" WHERE ("t4"."beta" > ?)'
 tests.model_sql.TestModelSQL.test_default_select_as_source  # fail: AssertionError: 'SELE[26 chars]ELECT "t2"."id" FROM "users" AS "t2") AS "t1"' != 'SELE[26 chars]ELECT "t2"."id", "t2"."username" FROM "users" AS "t2") AS "t1"'
+tests.model_sql.TestModelSQL.test_insert_empty_applies_defaults  # fail: AssertionError: 'INSERT INTO "dflt" DEFAULT VALUES' != 'INSERT INTO "dflt" ("a", "b") VALUES (?, ?)'
 tests.model_sql.TestModelSQL.test_subquery_as_select_column  # fail: AssertionError: 'SELE[68 chars]ERE ("t2"."user_id" = "t1"."id")) AS "t3" FROM "users" AS "t1"' != 'SELE[68 chars]ERE ("t2"."user_id" = "t1"."id")) FROM "users" AS "t1"'
 tests.model_sql.TestModelSQL.test_update_subquery_in_function  # fail: AssertionError: 'UPDA[31 chars]ESCE("t1", ?)' != 'UPDA[31 chars]ESCE((SELECT MAX("t1"."id") FROM "t" AS "t1" W[33 chars], ?)'
-tests.models.TestBulkCreateWithFK.test_bulk_create_with_fk  # fail: AssertionError: 0 != 1
 tests.models.TestCTEIntegration.test_recursive_cte  # error: OperationalError: (1292, "Truncated incorrect DOUBLE value: 'c31'")
 tests.models.TestCTEIntegration.test_recursive_cte_docs_example  # error: OperationalError: (1292, "Truncated incorrect DOUBLE value: 'root'")
 tests.models.TestCompoundExistsRegression.test_compound_regressions_1961  # error: ProgrammingError: (1064, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use ne
 tests.models.TestDefaultSelectAsSource.test_source_subquery_executes  # error: OperationalError: (1054, "Unknown column 't2.username' in 'field list'")
+tests.models.TestDefaultValues.test_empty_insert_lands_defaults  # error: IntegrityError: NOT NULL constraint failed: default_only.a
 tests.models.TestExistsIntegration.test_exists_compound_duplicate_columns  # error: ProgrammingError: (1064, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use n
 tests.models.TestLikeColumnValue.test_like_column_value  # fail: AssertionError: Lists differ: [] != [('u1', 'i am u1'), ('u1', 'u1 is my name'), ('u3', 'hey u3 is me')]
-tests.models.TestModelAPIs.test_bulk_create  # fail: AssertionError: 0 != 1
-tests.models.TestModelAPIs.test_bulk_create_batching  # fail: AssertionError: 0 != 4
-tests.models.TestModelAPIs.test_bulk_create_composite_key  # fail: AssertionError: Lists differ: [] != [('k1', 1, 1), ('k2', 2, 2)]
-tests.models.TestModelAPIs.test_bulk_create_error  # fail: AssertionError: IntegrityError not raised
-tests.models.TestModelAPIs.test_bulk_update_integrityerror  # error: IndexError: list index out of range
 tests.models.TestModelAPIs.test_compound_member_order_limit  # error: ProgrammingError: (1064, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'UNION SEL
 tests.models.TestModelAPIs.test_compound_select  # fail: AssertionError: 'SELE[172 chars]CT "t2"."id", "t2"."value" FROM "register" AS [36 chars]BY 2' != 'SELE[172 chars]CT "t3"."id", "t3"."value" FROM "register" AS [36 chars]BY 2'
 tests.models.TestModelAPIs.test_correlated_compound_subquery  # fail: AssertionError: 'SELE[201 chars] WHERE ("t3"."user_id" = "t4"."id"))) ORDER BY "t1"."username"' != 'SELE[201 chars] WHERE ("t3"."user_id" = "t1"."id"))) ORDER BY "t1"."us
+tests.models.TestModelAPIs.test_insert_rowcount  # error: OperationalError: (1292, "Truncated incorrect DOUBLE value: 'u1'")
 tests.models.TestModelAPIs.test_nested_compound_grouping  # fail: AssertionError: Lists differ: ['u1', 'u2', 'u3', 'u4', 'u5', 'u7'] != ['u2', 'u3', 'u7']
-tests.models.TestModelAPIs.test_union_cte  # fail: AssertionError: Lists differ: [] != ['u1', 'u7']
 tests.models.TestOuterJoinPopulateNone.test_join_custom_attr  # error: OperationalError: (1054, "Unknown column 't2.name' in 'field list'")
 tests.models.TestOuterJoinPopulateNone.test_join_fk  # error: OperationalError: (1054, "Unknown column 't2.name' in 'field list'")
 tests.models.TestOuterJoinPopulateNone.test_join_without_fk  # error: OperationalError: (1054, "Unknown column 't2.name' in 'field list'")
@@ -36,6 +31,8 @@ tests.models.TestOuterJoinPopulateNone.test_multi_hop  # error: OperationalError
 tests.models.TestSubqueryInFunction.test_subquery_in_single_arg_function  # error: ProgrammingError: (1064, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use ne
 tests.models.TestUpdateIntegrationRegressions.test_update_subquery_in_function  # error: OperationalError: (1054, "Unknown column 't1' in 'field list'")
 tests.results.TestRowTypes.test_dicts  # fail: AssertionError: {'""foo""': 'v0', '""t1"".""foo""()': 'v1', 'foo ': 'v2'} != {'"foo"': 'v0', '"t1"."foo"()': 'v1', 'foo ': 'v2'}
+tests.sql.TestOnConflictPostgresql.test_conflict_update_subquery_in_function  # fail: AssertionError: 'INSE[93 chars]tra" = COALESCE("t1", ?)' != 'INSE[93 chars]tra" = COALESCE((SELECT MAX("t1"."n") FROM "stat" AS "t1"), ?)'
+tests.sql.TestOnConflictSqlite.test_conflict_update_subquery_in_function  # fail: AssertionError: 'INSE[93 chars]tra" = COALESCE("t1", ?)' != 'INSE[93 chars]tra" = COALESCE((SELECT MAX("t1"."n") FROM "stat" AS "t1"), ?)'
 tests.sql.TestSelectQuery.test_case_subquery_in_function  # fail: AssertionError: 'SELE[33 chars]THEN SELECT MAX("t1"."id") FROM "users" AS "t1[30 chars]"t1"' != 'SELE[33 chars]THEN (SELECT MAX("t1"."id") FROM "users" AS "t[32 chars]"t1"'
 tests.sql.TestSelectQuery.test_compound_as_lone_function_argument  # fail: AssertionError: 'SELE[42 chars]ISTS((SELECT "t1"."id" FROM "users" AS "t1" WH[93 chars]?)))' != 'SELE[42 chars]ISTS(SELECT "t1"."id" FROM "users" AS "t1" WHE[91 char
 tests.sql.TestSelectQuery.test_compound_member_order_limit  # fail: AssertionError: 'SELECT "t1"."value" FROM "register" AS "t1" WHER[126 chars]> ?)' != 'SELECT * FROM (SELECT "t1"."value" FROM "registe[142 chars]> ?)'

@@ -20,11 +20,6 @@ use crate::classes::{isa, SCOPE_NORMAL, SCOPE_SOURCE, SCOPE_VALUES};
 use crate::ctx::{Converter, Ctx, Over};
 use crate::nodes::{basic, query};
 
-// Insert._query_type values.
-const INSERT_SIMPLE: u8 = 0;
-const INSERT_QUERY: u8 = 1;
-const INSERT_MULTI: u8 = 2;
-
 /// `_WriteQuery.__sql__`: `Query.__sql__` (the WITH clause) followed by
 /// `_set_table_alias`, which pins the target table's alias to its own name so
 /// that correlated sub-selects refer to it as `table.column` instead of `t2`.
@@ -63,7 +58,8 @@ fn python_ctx<'py>(ctx: &Ctx<'py>) -> PyResult<Bound<'py, PyAny>> {
     let raw = ctx.dialect.raw.bind(py);
     let pctx = ctx.c.context.bind(py).call((), Some(raw))?;
     let state_cls = py.import("peewee")?.getattr("State")?;
-    let st = state_cls.call((ctx.state.scope, ctx.state.parentheses), Some(raw))?;
+    // peewee 4: State(scope, parentheses, settings), settings as a dict.
+    let st = state_cls.call1((ctx.state.scope, ctx.state.parentheses, raw.copy()?))?;
     pctx.setattr(intern!(py, "state"), st)?;
     Ok(pctx)
 }
@@ -318,7 +314,9 @@ pub fn insert<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
 
         let insert_data = node.getattr(intern!(py, "_insert"))?;
         let columns = node.getattr(intern!(py, "_columns"))?;
-        let query_type = if isa(&insert_data, &c.mapping)? && !columns.is_truthy()? {
+        // peewee 4 derives `_query_type` from `_insert` / `_columns` (a
+        // read-only property), so there is nothing to record here.
+        if isa(&insert_data, &c.mapping)? && !columns.is_truthy()? {
             match simple_insert(ctx, node, &insert_data, &columns) {
                 Ok(()) => {}
                 Err(e) => {
@@ -330,16 +328,12 @@ pub fn insert<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
                     }
                 }
             }
-            INSERT_SIMPLE
         } else if isa(&insert_data, &c.select_query)? || isa(&insert_data, &c.sql)? {
             query_insert(ctx, &insert_data, &columns)?;
-            INSERT_QUERY
         } else {
             let rows = insert_data.try_iter()?;
             generate_insert(ctx, node, rows, &columns)?;
-            INSERT_MULTI
-        };
-        node.setattr(intern!(py, "_query_type"), query_type)?;
+        }
 
         if has_conflict {
             let conflict_update = ctx.dialect.conflict_update.clone();

@@ -489,7 +489,8 @@ impl<'py> Ctx<'py> {
         kwargs.set_item("value_literals", fl.value_literals)?;
         let pctx = self.c.context.bind(py).call((), Some(&kwargs))?;
         let state_cls = py.import("peewee")?.getattr(intern!(py, "State"))?;
-        let st = state_cls.call((self.state.scope, self.state.parentheses), Some(&kwargs))?;
+        // peewee 4: State(scope, parentheses, settings), settings as a dict.
+        let st = state_cls.call1((self.state.scope, self.state.parentheses, kwargs.copy()?))?;
         pctx.setattr("state", st)?;
         f(&pctx)?;
         let (sql, params): (String, Vec<Py<PyAny>>) = pctx.call_method0("query")?.extract()?;

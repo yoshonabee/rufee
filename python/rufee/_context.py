@@ -105,7 +105,7 @@ def _check_version() -> None:
 def _reference_render(query, scope, parentheses, settings):
     """Render with peewee's own Context, reproducing the caller's initial state."""
     ctx = _PeeweeContext(**settings)
-    ctx.state = _PeeweeState(scope, parentheses, **settings)
+    ctx.state = _PeeweeState(scope, parentheses, dict(settings))
     return ctx.sql(query).query()
 
 

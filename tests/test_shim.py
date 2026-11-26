@@ -111,6 +111,10 @@ def test_initial_state_is_forwarded(db, Item, monkeypatch):
     assert seen["settings"]["param"] == "?"
 
 
+def _rufee_records(caplog, message):
+    return [r for r in caplog.records if r.name == "rufee" and r.getMessage() == message]
+
+
 def test_renderer_exception_falls_back(db, Item, monkeypatch, caplog):
     def boom(*a, **k):
         raise RuntimeError("rust exploded")
@@ -122,6 +126,29 @@ def test_renderer_exception_falls_back(db, Item, monkeypatch, caplog):
     assert rufee.stats.fallback == 1
     assert rufee.stats.errors == 1
     assert "rust exploded" in caplog.text
+
+
+def test_renderer_exception_peewee_renders_is_a_warning(db, Item, monkeypatch, caplog):
+    # Rust failed where peewee succeeds: a Rust bug, reported at WARNING with
+    # a fixed message and the details in ``extra``.
+    def boom(*a, **k):
+        raise RuntimeError("rust exploded")
+
+    monkeypatch.setattr(_context._native, "render", boom)
+    with caplog.at_level(logging.WARNING, logger="rufee"):
+        db.get_sql_context().sql(Item.select()).query()
+    [record] = _rufee_records(caplog, "rufee: renderer error")
+    assert record.levelno == logging.WARNING
+    assert record.rufee["query_type"] == "ModelSelect"
+    assert record.rufee["error"] == "RuntimeError: rust exploded"
+    assert record.rufee["callsite"].startswith(__file__)
+
+
+def test_expected_errors_are_not_warned(db, Item, caplog):
+    # peewee raises the same error, so it is the caller's problem, not rufee's.
+    with caplog.at_level(logging.WARNING, logger="rufee"), pytest.raises(ValueError):
+        db.get_sql_context().sql(Item.select().for_update()).query()
+    assert _rufee_records(caplog, "rufee: renderer error") == []
 
 
 def test_expected_errors_come_from_peewee_too(db, Item):
@@ -152,8 +179,14 @@ def test_shadow_mode_returns_peewee_result_on_mismatch(db, Item, monkeypatch, ca
         assert db.get_sql_context().sql(q).query() == _reference(q)
     assert rufee.stats.shadow == 1
     assert rufee.stats.mismatch == 1
-    assert "shadow mismatch" in caplog.text
-    assert "offset" in caplog.text
+    [record] = _rufee_records(caplog, "rufee: shadow mismatch")
+    details = record.rufee
+    assert details["diff"] == "sql"
+    assert details["query_type"] == "ModelSelect"
+    assert details["offset"] == len("SELECT ")
+    assert details["rust_sql"] == "SELECT wrong"
+    assert details["peewee_sql"] == _reference(q)[0]
+    assert details["callsite"].startswith(__file__)
 
 
 def test_shadow_mode_param_mismatch_is_reported(db, Item, monkeypatch, caplog):
@@ -164,7 +197,49 @@ def test_shadow_mode_param_mismatch_is_reported(db, Item, monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="rufee"):
         assert db.get_sql_context().sql(q).query() == _reference(q)
     assert rufee.stats.mismatch == 1
-    assert "params differ" in caplog.text
+    [record] = _rufee_records(caplog, "rufee: shadow mismatch")
+    details = record.rufee
+    assert details["diff"] == "params"
+    assert details["param_index"] == 0
+    assert details["rust_param_type"] == details["peewee_param_type"] == "int"
+    assert details["rust_param_count"] == details["peewee_param_count"] == 1
+
+
+def test_shadow_mismatch_never_logs_param_values(db, Item, monkeypatch, caplog):
+    rufee.configure(mode="shadow")
+    q = Item.select().where(Item.name == "secret-value-1")
+    sql, _params = _reference(q)
+    monkeypatch.setattr(_context._native, "render",
+                        lambda *a, **k: (sql, ["secret-value-2"]))
+    with caplog.at_level(logging.WARNING, logger="rufee"):
+        db.get_sql_context().sql(q).query()
+    [record] = _rufee_records(caplog, "rufee: shadow mismatch")
+    dumped = repr(record.__dict__)
+    assert "secret-value" not in dumped
+    assert record.rufee["rust_param_type"] == "str"
+
+
+def test_shadow_mismatch_param_count_differs(db, Item, monkeypatch, caplog):
+    rufee.configure(mode="shadow")
+    q = Item.select().where(Item.qty == 5)
+    sql, _params = _reference(q)
+    monkeypatch.setattr(_context._native, "render", lambda *a, **k: (sql, [5, 6]))
+    with caplog.at_level(logging.WARNING, logger="rufee"):
+        db.get_sql_context().sql(q).query()
+    [record] = _rufee_records(caplog, "rufee: shadow mismatch")
+    assert record.rufee["param_index"] == 1
+    assert record.rufee["rust_param_type"] == "int"
+    assert record.rufee["peewee_param_type"] is None
+
+
+def test_shadow_mismatch_long_sql_is_clipped(db, Item, monkeypatch, caplog):
+    rufee.configure(mode="shadow")
+    monkeypatch.setattr(_context._native, "render",
+                        lambda *a, **k: ("SELECT " + "x" * 10_000, []))
+    with caplog.at_level(logging.WARNING, logger="rufee"):
+        db.get_sql_context().sql(Item.select()).query()
+    [record] = _rufee_records(caplog, "rufee: shadow mismatch")
+    assert len(record.rufee["rust_sql"]) == _context._SQL_MAX + len("...")
 
 
 def test_shadow_mode_silent_when_identical(db, Item, monkeypatch, caplog):
@@ -234,3 +309,24 @@ def test_reference_render_survives_rebinding_peewee_context(db, Item, monkeypatc
     sql, params = db.get_sql_context().sql(q).query()
     assert sql.startswith('SELECT "t1"."id"')
     assert rufee.stats.mismatch == 1
+
+
+def test_stats_snapshot(db, Item):
+    db.get_sql_context().sql(Item.select()).query()
+    assert rufee.stats.snapshot() == {
+        "rust": 1, "fallback": 0, "errors": 0, "shadow": 0, "mismatch": 0,
+    }
+
+
+def test_callsite_skips_peewee_frames(db, Item, monkeypatch, caplog):
+    # The query runs through Model.select() -> execute -> peewee internals;
+    # the callsite must still point here, not into peewee.py.
+    rufee.configure(mode="shadow")
+    monkeypatch.setattr(_context._native, "render", lambda *a, **k: ("SELECT wrong", []))
+    db.connect()
+    db.create_tables([Item])
+    with caplog.at_level(logging.WARNING, logger="rufee"):
+        list(Item.select())
+    [record] = _rufee_records(caplog, "rufee: shadow mismatch")
+    assert record.rufee["callsite"].startswith(f"{__file__}:")
+    assert record.rufee["callsite"].endswith(" in test_callsite_skips_peewee_frames")

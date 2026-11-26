@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 import warnings
 from dataclasses import dataclass, field
@@ -53,6 +54,14 @@ class Stats:
     def reset(self) -> None:
         with self._lock:
             self.rust = self.fallback = self.errors = self.shadow = self.mismatch = 0
+
+    def snapshot(self) -> dict[str, int]:
+        """All counters, read together under the lock."""
+        with self._lock:
+            return {name: getattr(self, name) for name in _COUNTERS}
+
+
+_COUNTERS = ("rust", "fallback", "errors", "shadow", "mismatch")
 
 
 stats = Stats()
@@ -109,15 +118,72 @@ def _reference_render(query, scope, parentheses, settings):
     return ctx.sql(query).query()
 
 
-def _describe_mismatch(rust, ref) -> str:
+# Frames skipped when looking for the code that ran the query: peewee is a
+# single module (peewee.py), playhouse and rufee are packages.
+_INTERNAL_FILES = frozenset({os.path.abspath(peewee.__file__)})
+_INTERNAL_DIRS = (os.path.dirname(os.path.abspath(__file__)) + os.sep,)
+_SQL_EXCERPT = 60
+_SQL_MAX = 4000
+
+
+def _is_internal(filename: str) -> bool:
+    path = os.path.abspath(filename)
+    if path in _INTERNAL_FILES or path.startswith(_INTERNAL_DIRS):
+        return True
+    # playhouse ships next to peewee.py, as its own package
+    return f"{os.sep}playhouse{os.sep}" in path
+
+
+def _callsite() -> str | None:
+    """``file:line in function`` of the first frame outside peewee / playhouse / rufee."""
+    frame = sys._getframe(1)
+    while frame is not None:
+        code = frame.f_code
+        if not _is_internal(code.co_filename):
+            return f"{code.co_filename}:{frame.f_lineno} in {code.co_name}"
+        frame = frame.f_back
+    return None
+
+
+def _clip(sql: str) -> str:
+    return sql if len(sql) <= _SQL_MAX else sql[:_SQL_MAX] + "..."
+
+
+def _mismatch_details(query, rust, ref) -> dict:
+    """What differs between the Rust and the peewee render, without parameter values.
+
+    Parameter values are user data (emails, addresses, tokens) and never logged;
+    only their position, count and type are. The SQL itself carries placeholders.
+    """
     rsql, rparams = rust
     psql, pparams = ref
+    details = {"query_type": type(query).__name__, "callsite": _callsite()}
     if rsql != psql:
         n = min(len(rsql), len(psql))
         pos = next((i for i in range(n) if rsql[i] != psql[i]), n)
-        return (f"sql differs at offset {pos}: rust={rsql[max(0, pos - 30):pos + 30]!r} "
-                f"peewee={psql[max(0, pos - 30):pos + 30]!r}")
-    return f"params differ: rust={rparams!r} peewee={pparams!r}"
+        start = max(0, pos - _SQL_EXCERPT)
+        details.update(
+            diff="sql",
+            offset=pos,
+            rust_excerpt=rsql[start:pos + _SQL_EXCERPT],
+            peewee_excerpt=psql[start:pos + _SQL_EXCERPT],
+            rust_sql=_clip(rsql),
+            peewee_sql=_clip(psql),
+        )
+        return details
+    rparams, pparams = list(rparams), list(pparams)
+    n = min(len(rparams), len(pparams))
+    index = next((i for i in range(n) if rparams[i] != pparams[i]), n)
+    details.update(
+        diff="params",
+        sql=_clip(psql),
+        param_index=index,
+        rust_param_count=len(rparams),
+        peewee_param_count=len(pparams),
+        rust_param_type=type(rparams[index]).__name__ if index < len(rparams) else None,
+        peewee_param_type=type(pparams[index]).__name__ if index < len(pparams) else None,
+    )
+    return details
 
 
 class Context(_PeeweeContext):
@@ -152,20 +218,27 @@ class Context(_PeeweeContext):
         except Exception as exc:  # noqa: BLE001 - any Rust-side failure is a fallback
             # Usually a legitimate error peewee raises too (ValueError from an
             # on-conflict hook, "FOR UPDATE not supported", ...): peewee's own
-            # renderer will raise it again during the fallback. A genuine Rust
-            # bug also lands here; shadow mode is how those are found.
+            # renderer raises it again during the fallback and the caller sees
+            # it. When peewee renders the query fine instead, the Rust side has
+            # a bug: the result is still correct, but it is worth a warning.
             stats._bump("errors")
             log.debug("rufee: renderer raised %r for %s; falling back",
                       exc, type(query).__name__)
-            return self._fallback(query, exc)
+            self._fallback(query, exc)
+            log.warning("rufee: renderer error", extra={"rufee": {
+                "query_type": type(query).__name__,
+                "callsite": _callsite(),
+                "error": f"{type(exc).__name__}: {exc}",
+            }})
+            return self
 
         if _config.mode == MODE_SHADOW:
             ref = _reference_render(query, state.scope, state.parentheses, settings)
             stats._bump("shadow")
             if (result[0], list(result[1])) != (ref[0], list(ref[1])):
                 stats._bump("mismatch")
-                log.warning("rufee: shadow mismatch for %s: %s",
-                            type(query).__name__, _describe_mismatch(result, ref))
+                log.warning("rufee: shadow mismatch",
+                            extra={"rufee": _mismatch_details(query, result, ref)})
             result = ref
         else:
             stats._bump("rust")

@@ -14,9 +14,8 @@ string and parameter list.
 
 Status: **renders peewee 4.5.3's entire test-suite byte-identically** (strict
 mode 100% on sqlite and MySQL, including peewee's asyncio tests, see below).
-peewee 3.x is no longer supported; use rufee `v0.1.0` for peewee 3.17. Not on
-PyPI yet —
-install from a wheel or from source, see
+peewee 3.x is no longer supported; use rufee `v0.1.0` for peewee 3.17.
+Install with `pip install rufee`; other options are in
 [`docs/installation.md`](docs/installation.md). The API may still move.
 
 ## How it plugs in
@@ -50,9 +49,11 @@ synchronous `context_class` path inside a greenlet, so rufee needs nothing
 async-specific.
 
 Full instructions — wheels, building from source, the Docker recipe, the
-`RUFEE_MODE` / `RUFEE_FALLBACK` / `RUFEE_FORCE` knobs, how to verify the install
-and how to roll it out through shadow mode — are in
-[`docs/installation.md`](docs/installation.md).
+`RUFEE_MODE` / `RUFEE_FALLBACK` / `RUFEE_FORCE` knobs and how to verify the
+install — are in [`docs/installation.md`](docs/installation.md). To put it in
+front of production traffic, go through shadow mode first:
+[`docs/migration-guide.md`](docs/migration-guide.md) covers the rollout, what
+rufee logs and counts, and how to read a mismatch.
 
 ## Design
 
@@ -72,8 +73,9 @@ and how to roll it out through shadow mode — are in
   1. *Whole-query fallback*: any node type the Rust side does not support, and
      any Rust-side error, makes the whole query re-render through peewee's
      original `Context`. Incomplete coverage is slower, never wrong.
-  2. *Shadow mode*: render both ways, log any mismatch (SQL string or params),
-     and return peewee's result. Meant for staging before switching over.
+  2. *Shadow mode*: render both ways, log any mismatch (SQL string or params,
+     never parameter values) with the application call site, and return
+     peewee's result. Meant for production traffic before switching over.
   3. *Version gate*: rufee reads peewee's private attributes (`_from_list`,
      `_where`, `_returning`, `Join._on`, ...). It targets peewee **4.5.x**;
      on any other version it degrades to a pure pass-through.
@@ -158,12 +160,13 @@ make mysql-up && make peewee-tests ARGS="-e mysql --strict"
 make peewee-tests ARGS="-e sqlite --baseline"   # unmodified peewee
 ```
 
-### rufee's own tests (`tests/`, 295 cases)
+### rufee's own tests (`tests/`)
 
 1. **Shim behaviour** (`test_shim.py`): fallback triggers (unsupported node,
    Rust error, Rust panic) never leak exceptions; shadow mode logs mismatches
-   and returns peewee's result; version gate degrades to pass-through; the
-   initial state and every context option are forwarded.
+   with their call site and without parameter values, and returns peewee's
+   result; version gate degrades to pass-through; the initial state and every
+   context option are forwarded.
 2. **Differential testing** (`test_differential.py`, hypothesis): random query
    trees from a small grammar (selects, joins, subqueries, compound selects,
    inserts, updates, deletes, functions, windows, CASE) rendered with both
@@ -209,10 +212,11 @@ Ordered. Done items are kept for the record.
    `CompoundSelectQuery`, `BitField` flags. Every node type peewee's suite
    exercises now renders in Rust.
 8. **Docs**: installation / user guide done — [`docs/installation.md`](docs/installation.md)
-   (install, `context_class`, configuration, verification, shadow rollout,
-   version gate, troubleshooting). Still to write: a contributor guide (how to
-   add a node type: Rust match arm + hypothesis rule + which peewee tests it
-   unlocks).
+   (install, `context_class`, configuration, verification, version gate,
+   troubleshooting) and [`docs/migration-guide.md`](docs/migration-guide.md)
+   (shadow → rust rollout, logs and counters, mismatch triage, rollback).
+   Still to write: a contributor guide (how to add a node type: Rust match arm
+   + hypothesis rule + which peewee tests it unlocks).
 9. ~~**Performance pass**~~ Done. Join select went from 14.7 to 9.8 µs
    (7.3x → 11.0x), `insert_many` ×100 from 275 to 195 µs, by: keeping the
    dialect options off the per-scope state so a scope change clones seven
@@ -225,8 +229,9 @@ Ordered. Done items are kept for the record.
    the C API and calling each field's `db_value` converter, both required for
    byte-identical output. Going further means not reading the Python tree at
    all, which is the rejected "AST in Rust" design.
-10. **Release**: version, changelog, publish wheels from the `v*` tag workflow.
-    Version and changelog done for 0.2.0; publishing still to do.
+10. ~~**Release**~~ Done: a `v*` tag runs CI, builds wheels and the sdist,
+    publishes to PyPI (trusted publishing) and attaches them to the GitHub
+    release.
 11. ~~**peewee 4.5.3**~~ Done (0.2.0): State / `_query_type` interface,
     ordering and window quoting, compound selects, FOR UPDATE, MySQL `CONCAT()`,
     sub-selects as operands and sources, JSON paths, asyncio coverage.
@@ -250,7 +255,7 @@ Configuration at runtime: `RUFEE_MODE=rust|shadow|off` (default `rust`),
 `RUFEE_FALLBACK=1|0` (default `1`; `0` makes unsupported nodes raise
 `rufee.Unsupported`), or `rufee.configure(mode=..., fallback=...)`. Counters
 live in `rufee.stats`; shadow-mode mismatches are logged on the `rufee`
-logger at WARNING.
+logger at WARNING (see [`docs/migration-guide.md`](docs/migration-guide.md)).
 
 ## License
 

@@ -4,8 +4,8 @@ use pyo3::intern;
 use pyo3::prelude::*;
 
 use crate::classes::{
-    isa, CSQ_PARENTHESES_ALWAYS, CSQ_PARENTHESES_NEVER, CSQ_PARENTHESES_UNNESTED, SCOPE_COLUMN,
-    SCOPE_CTE, SCOPE_NORMAL, SCOPE_SOURCE, SCOPE_VALUES,
+    isa, CSQ_PARENTHESES_ALWAYS, CSQ_PARENTHESES_GROUPED, CSQ_PARENTHESES_NEVER,
+    CSQ_PARENTHESES_UNNESTED, SCOPE_COLUMN, SCOPE_CTE, SCOPE_NORMAL, SCOPE_SOURCE, SCOPE_VALUES,
 };
 use crate::ctx::{Converter, Ctx, Over};
 use crate::nodes::basic;
@@ -99,15 +99,17 @@ pub fn select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
         ctx.literal("LATERAL ");
     }
     let is_subquery = ctx.state.flags.subquery;
-    let mut parens = is_subquery || ctx.scope() == SCOPE_SOURCE;
-    if ctx.state.flags.in_function && ctx.state.flags.function_arg_count == Some(1) {
-        parens = false;
-    }
+    // A real FROM/JOIN source. The SELECT list is SCOPE_SOURCE too, but it is
+    // flagged in_projection.
+    let is_source = ctx.scope() == SCOPE_SOURCE && !ctx.state.flags.in_projection;
     let over = Over::default()
         .scope(SCOPE_NORMAL)
         .converter(None)
+        .in_expr(false)
         .in_function(false)
-        .parens(parens)
+        .in_projection(false)
+        .bare_subquery(false)
+        .parens(subquery_parens(ctx))
         .subquery(true);
 
     ctx.with(over, |ctx| {
@@ -123,9 +125,10 @@ pub fn select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
                 ctx.literal(" ");
             }
         }
-        ctx.with(Over::default().scope(SCOPE_SOURCE), |ctx| {
-            sql_selection(ctx, node, is_subquery)
-        })?;
+        ctx.with(
+            Over::default().scope(SCOPE_SOURCE).in_projection(true),
+            |ctx| sql_selection(ctx, node, is_subquery && !is_source),
+        )?;
 
         let from_list = node.getattr(intern!(py, "_from_list"))?;
         if from_list.is_truthy()? {
@@ -156,26 +159,40 @@ pub fn select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
         }
         apply_ordering(ctx, node)?;
 
+        // peewee 4.0.3+: `_for_update` holds a ready-made `ForUpdate` node
+        // (or None); the `of` / `nowait` / `skip_locked` parts live on it.
         let for_update = node.getattr(intern!(py, "_for_update"))?;
-        if for_update.is_truthy()? {
+        if !for_update.is_none() {
             if !ctx.dialect.for_update {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "FOR UPDATE specified but not supported by database.",
                 ));
             }
             ctx.literal(" ");
-            let fu = ctx.c.for_update.bind(ctx.py).call1((
-                &for_update,
-                node.getattr(intern!(py, "_for_update_of"))?,
-                node.getattr(intern!(py, "_for_update_nowait"))?,
-            ))?;
-            ctx.sql(&fu)?;
+            ctx.sql(&for_update)?;
         }
         Ok(())
     })?;
 
-    if ctx.state.flags.in_function
-        || (ctx.state.flags.in_expr && node.getattr(intern!(py, "_alias"))?.is_none())
+    apply_subquery_alias(ctx, node)
+}
+
+/// `SelectBase._subquery_parens`.
+fn subquery_parens(ctx: &Ctx<'_>) -> bool {
+    // bare_subquery is set by Function for its subquery_functions.
+    if ctx.state.flags.bare_subquery {
+        return false;
+    }
+    ctx.state.flags.subquery || ctx.scope() == SCOPE_SOURCE
+}
+
+/// `SelectBase._apply_subquery_alias`: no alias inside a function, or when
+/// unaliased in an expression or a SELECT list.
+fn apply_subquery_alias<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
+    let flags = &ctx.state.flags;
+    if flags.in_function
+        || ((flags.in_expr || flags.in_projection)
+            && node.getattr(intern!(ctx.py, "_alias"))?.is_none())
     {
         return Ok(());
     }
@@ -227,49 +244,165 @@ pub fn compound_select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyR
         return apply_column(ctx, node);
     }
     query_ctes(ctx, node)?;
-    let outer_parens = ctx.state.flags.subquery || ctx.scope() == SCOPE_SOURCE;
+    let parens = subquery_parens(ctx);
     let lhs = node.getattr(intern!(py, "lhs"))?;
     let rhs = node.getattr(intern!(py, "rhs"))?;
     let op: String = node.getattr(intern!(py, "op"))?.extract()?;
-    ctx.with(Over::default().parens(outer_parens), |ctx| {
-        let lhs_parens = wrap_parens(ctx, &lhs)?;
-        ctx.with(
-            Over::default()
-                .scope(SCOPE_NORMAL)
-                .parens(lhs_parens)
-                .subquery(false),
-            |ctx| ctx.sql(&lhs),
-        )?;
-        ctx.literal(&format!(" {} ", op));
+    ctx.with(Over::default().parens(parens).bare_subquery(false), |ctx| {
+        // Correlated rhs refs must resolve to the enclosing aliases: the rhs
+        // renders in a fresh alias scope seeded with the aliases known before
+        // the lhs was rendered, so its own sources still get fresh aliases.
+        let outer = ctx.aliases.snapshot(py)?;
+        member_sql(ctx, &op, &lhs, true)?;
+        ctx.literal(" ");
+        ctx.literal(&op);
+        ctx.literal(" ");
         ctx.with_alias_scope(|ctx| {
-            let rhs_parens = wrap_parens(ctx, &rhs)?;
-            ctx.with(
-                Over::default()
-                    .scope(SCOPE_NORMAL)
-                    .parens(rhs_parens)
-                    .subquery(false),
-                |ctx| ctx.sql(&rhs),
-            )
+            ctx.aliases.seed(py, &outer)?;
+            member_sql(ctx, &op, &rhs, false)
         })?;
         ctx.with(Over::default().scope(SCOPE_VALUES), |ctx| {
             apply_ordering(ctx, node)
         })
     })?;
-    apply_alias(ctx, node)
+    apply_subquery_alias(ctx, node)
 }
 
-fn wrap_parens<'py>(ctx: &Ctx<'py>, subq: &Bound<'py, PyAny>) -> PyResult<bool> {
-    match ctx.dialect.compound_select_parentheses {
-        None | Some(CSQ_PARENTHESES_NEVER) => Ok(false),
-        Some(CSQ_PARENTHESES_ALWAYS) => Ok(true),
-        Some(CSQ_PARENTHESES_UNNESTED) => {
-            if ctx.state.flags.in_expr || ctx.state.flags.in_function {
-                return Ok(false);
-            }
-            Ok(!isa(subq, &ctx.c.compound_select_query)?)
-        }
-        Some(_) => Ok(false),
+/// How a compound member is written (`CSQ_FLAT` / `CSQ_PARENS` / `CSQ_WRAP`).
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum MemberStyle {
+    Flat,
+    Parens,
+    /// `SELECT * FROM (...)`, for dialects without member parentheses.
+    Wrap,
+}
+
+/// `CompoundSelectQuery._member_sql`.
+fn member_sql<'py>(
+    ctx: &mut Ctx<'py>,
+    op: &str,
+    subq: &Bound<'py, PyAny>,
+    lhs: bool,
+) -> PyResult<()> {
+    let style = member_style(ctx, op, subq, lhs)?;
+    if style == MemberStyle::Wrap {
+        ctx.literal("SELECT * FROM ");
     }
+    ctx.with(
+        Over::default()
+            .scope(SCOPE_NORMAL)
+            .parens(style != MemberStyle::Flat)
+            .subquery(false),
+        |ctx| ctx.sql(subq),
+    )
+}
+
+/// `CompoundSelectQuery._member_style`.
+fn member_style<'py>(
+    ctx: &Ctx<'py>,
+    op: &str,
+    subq: &Bound<'py, PyAny>,
+    lhs: bool,
+) -> PyResult<MemberStyle> {
+    let is_compound = isa(subq, &ctx.c.compound_select_query)?;
+    let in_expr = ctx.state.flags.in_expr || ctx.state.flags.in_function;
+    match ctx.dialect.compound_select_parentheses {
+        None | Some(CSQ_PARENTHESES_NEVER) => {
+            // Parens are not allowed (sqlite): wrap a member that needs
+            // grouping as a subquery instead.
+            if is_compound {
+                if needs_group(ctx, op, subq, lhs)? {
+                    return Ok(MemberStyle::Wrap);
+                }
+            } else if self_wraps(subq)? {
+                return Ok(MemberStyle::Wrap);
+            }
+        }
+        Some(CSQ_PARENTHESES_ALWAYS) => return Ok(MemberStyle::Parens),
+        Some(CSQ_PARENTHESES_UNNESTED) => {
+            if in_expr {
+                return Ok(MemberStyle::Flat);
+            }
+            if !is_compound {
+                return Ok(MemberStyle::Parens);
+            }
+        }
+        Some(CSQ_PARENTHESES_GROUPED) => {
+            if is_compound {
+                if in_expr && (op == "UNION" || op == "UNION ALL") && union_only(ctx, subq)? {
+                    // IN / EXISTS only see the distinct set; stay flat.
+                    return Ok(MemberStyle::Flat);
+                }
+                if needs_group(ctx, op, subq, lhs)? {
+                    return Ok(MemberStyle::Parens);
+                }
+            } else if !in_expr {
+                return Ok(MemberStyle::Parens);
+            }
+        }
+        Some(_) => {}
+    }
+    Ok(MemberStyle::Flat)
+}
+
+fn compound_op(subq: &Bound<'_, PyAny>) -> PyResult<String> {
+    subq.getattr(intern!(subq.py(), "op"))?.extract()
+}
+
+/// `CompoundSelectQuery._self_wraps`: an inner ORDER BY / LIMIT / OFFSET.
+fn self_wraps(subq: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = subq.py();
+    Ok(subq.getattr(intern!(py, "_order_by"))?.is_truthy()?
+        || !subq.getattr(intern!(py, "_limit"))?.is_none()
+        || !subq.getattr(intern!(py, "_offset"))?.is_none())
+}
+
+/// `CompoundSelectQuery._needs_group`: whether writing the member flat
+/// would change the result.
+fn needs_group<'py>(
+    ctx: &Ctx<'py>,
+    op: &str,
+    subq: &Bound<'py, PyAny>,
+    lhs: bool,
+) -> PyResult<bool> {
+    if self_wraps(subq)? {
+        return Ok(true);
+    }
+    if lhs {
+        // A flat lhs folds left to right before our op applies.
+        return Ok(op == "INTERSECT" && compound_op(subq)? != op);
+    }
+    if op == "EXCEPT" {
+        return Ok(true);
+    }
+    // A flat rhs joins the outer chain through its left spine, so every op
+    // along it must match ours.
+    let csq = &ctx.c.compound_select_query;
+    let mut node = subq.clone();
+    while isa(&node, csq)? {
+        if compound_op(&node)? != op {
+            return Ok(true);
+        }
+        node = node.getattr(intern!(ctx.py, "lhs"))?;
+        if isa(&node, csq)? && self_wraps(&node)? {
+            break;
+        }
+    }
+    Ok(false)
+}
+
+/// `CompoundSelectQuery._union_only`: the whole subtree is UNION / UNION ALL
+/// with no inner ordering.
+fn union_only<'py>(ctx: &Ctx<'py>, subq: &Bound<'py, PyAny>) -> PyResult<bool> {
+    if !isa(subq, &ctx.c.compound_select_query)? {
+        return Ok(true);
+    }
+    let op = compound_op(subq)?;
+    if (op != "UNION" && op != "UNION ALL") || self_wraps(subq)? {
+        return Ok(false);
+    }
+    Ok(union_only(ctx, &subq.getattr(intern!(ctx.py, "lhs"))?)?
+        && union_only(ctx, &subq.getattr(intern!(ctx.py, "rhs"))?)?)
 }
 
 // RawQuery.__sql__
@@ -298,6 +431,8 @@ pub fn for_update<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult
     }
     if node.getattr(intern!(py, "_nowait"))?.is_truthy()? {
         ctx.literal(" NOWAIT");
+    } else if node.getattr(intern!(py, "_skip_locked"))?.is_truthy()? {
+        ctx.literal(" SKIP LOCKED");
     }
     Ok(())
 }

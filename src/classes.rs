@@ -28,6 +28,7 @@ classes! {
     foreign_key_field = "peewee"::"ForeignKeyField",
     wrapped_node = "peewee"::"WrappedNode",
     expression = "peewee"::"Expression",
+    string_expression = "peewee"::"StringExpression",
     entity = "peewee"::"Entity",
     sql = "peewee"::"SQL",
     value = "peewee"::"Value",
@@ -45,6 +46,8 @@ classes! {
     window_alias = "peewee"::"WindowAlias",
     in_function = "peewee"::"_InFunction",
     case = "peewee"::"Case",
+    json_path = "peewee"::"JSONPath",
+    fn_ = "peewee"::"fn",
     for_update = "peewee"::"ForUpdate",
     star = "peewee"::"Star",
     qualified_names = "peewee"::"QualifiedNames",
@@ -59,6 +62,7 @@ classes! {
     noop_model_select = "peewee"::"NoopModelSelect",
     model_select = "peewee"::"ModelSelect",
     select_query = "peewee"::"SelectQuery",
+    select_base = "peewee"::"SelectBase",
     compound_select_query = "peewee"::"CompoundSelectQuery",
     update = "peewee"::"Update",
     insert = "peewee"::"Insert",
@@ -106,3 +110,4 @@ pub const SCOPE_COLUMN: u8 = 16;
 pub const CSQ_PARENTHESES_NEVER: i64 = 0;
 pub const CSQ_PARENTHESES_ALWAYS: i64 = 1;
 pub const CSQ_PARENTHESES_UNNESTED: i64 = 2;
+pub const CSQ_PARENTHESES_GROUPED: i64 = 3;

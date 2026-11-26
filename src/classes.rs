@@ -46,6 +46,8 @@ classes! {
     window_alias = "peewee"::"WindowAlias",
     in_function = "peewee"::"_InFunction",
     case = "peewee"::"Case",
+    json_path = "peewee"::"JSONPath",
+    fn_ = "peewee"::"fn",
     for_update = "peewee"::"ForUpdate",
     star = "peewee"::"Star",
     qualified_names = "peewee"::"QualifiedNames",

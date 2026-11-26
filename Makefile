@@ -1,12 +1,11 @@
 PY ?= .venv/bin/python
-PEEWEE_TAG ?= 3.17.9
+PEEWEE_TAG ?= 4.5.3
 
 .PHONY: venv dev test cargo-test lint peewee-src peewee-tests mysql-up mysql-down clean
 
-venv:            ## create .venv (Python 3.11) with dev deps; peewee without C extensions
+venv:            ## create .venv (Python 3.11) with dev deps
 	uv venv -p 3.11 .venv
-	NO_SQLITE=1 uv pip install -p $(PY) --no-binary peewee -e ".[dev]"
-	rm -f .venv/lib/python3.11/site-packages/playhouse/_sqlite_*.so
+	uv pip install -p $(PY) -e ".[dev]"
 
 dev:             ## build the extension into .venv (release)
 	VIRTUAL_ENV=$(CURDIR)/.venv .venv/bin/maturin develop --release

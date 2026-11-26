@@ -20,7 +20,7 @@ _PeeweeState = peewee.State
 
 log = logging.getLogger("rufee")
 
-SUPPORTED_PEEWEE = "3.17."
+SUPPORTED_PEEWEE = "4.5."
 
 MODE_RUST = "rust"      # render with Rust, fall back to peewee when unsupported
 MODE_SHADOW = "shadow"  # render both, log mismatches, return peewee's result
@@ -105,7 +105,7 @@ def _check_version() -> None:
 def _reference_render(query, scope, parentheses, settings):
     """Render with peewee's own Context, reproducing the caller's initial state."""
     ctx = _PeeweeContext(**settings)
-    ctx.state = _PeeweeState(scope, parentheses, **settings)
+    ctx.state = _PeeweeState(scope, parentheses, dict(settings))
     return ctx.sql(query).query()
 
 

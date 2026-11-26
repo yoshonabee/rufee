@@ -28,10 +28,17 @@ pub fn function<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<(
             None
         };
         let n = args.len();
+        // peewee 4: a lone SelectBase argument of a subquery function (EXISTS,
+        // ANY, ...) is rendered bare, the function's parentheses enclose it.
+        // With an ORDER BY the last argument is wrapped in a NodeList.
+        let bare = n == 1
+            && order_by.is_none()
+            && isa(&args[0], &ctx.c.select_base)?
+            && node
+                .getattr(intern!(py, "subquery_functions"))?
+                .contains(name.to_lowercase())?;
         ctx.with(
-            Over::default()
-                .in_function(true)
-                .function_arg_count(Some(n)),
+            Over::default().in_function(true).bare_subquery(bare),
             |ctx| function_args(ctx, &args, order_by.as_ref()),
         )?;
     }
@@ -152,7 +159,7 @@ pub fn window<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
     let inline = node.getattr(intern!(py, "_inline"))?.is_truthy()?;
     if ctx.scope() != SCOPE_SOURCE && !inline {
         let alias: String = node.getattr(intern!(py, "_alias"))?.extract()?;
-        ctx.literal(&alias);
+        ctx.entity(&[&alias])?;
         ctx.literal(" AS ");
     }
 
@@ -178,10 +185,10 @@ pub fn window<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
             sep(ctx);
             if isa(&extends, &ctx.c.window)? {
                 let alias: String = extends.getattr(intern!(py, "_alias"))?.extract()?;
-                ctx.literal(&alias);
+                ctx.entity(&[&alias])?;
             } else if extends.is_instance_of::<PyString>() {
                 let s: String = extends.extract()?;
-                ctx.literal(&s);
+                ctx.entity(&[&s])?;
             } else {
                 ctx.sql(&extends)?;
             }
@@ -233,11 +240,12 @@ pub fn window_alias<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResu
     let alias = node
         .getattr(intern!(py, "window"))?
         .getattr(intern!(py, "_alias"))?;
+    // ctx.sql(Entity(self.window._alias or 'w'))
     if alias.is_truthy()? {
         let a: String = alias.extract()?;
-        ctx.literal(&a);
+        ctx.entity(&[&a])?;
     } else {
-        ctx.literal("w");
+        ctx.entity(&["w"])?;
     }
     Ok(())
 }

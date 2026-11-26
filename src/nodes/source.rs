@@ -57,7 +57,7 @@ pub fn table<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> 
     apply_column(ctx, node)
 }
 
-/// `Entity(*path)`: Entity.__init__ escapes `"` as `""` and drops empty parts.
+/// `Entity(*path)`: drops empty parts and escapes the quote char per part.
 fn entity_path(ctx: &mut Ctx<'_>, parts: &[&str]) -> PyResult<()> {
     ctx.entity(parts)
 }
@@ -92,7 +92,9 @@ pub fn values_list<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResul
             .getattr(intern!(py, "_values"))?
             .try_iter()?
             .collect::<PyResult<_>>()?;
-        let parens = !ctx.state.parentheses;
+        // peewee 4: an operand (`x IN (VALUES ...)`) keeps its parentheses
+        // even when the enclosing Expression already wrote one.
+        let parens = !ctx.state.parentheses || ctx.state.flags.in_expr;
         ctx.with(Over::default().parens(parens), |ctx| {
             ctx.literal("VALUES ");
             // CommaNodeList([EnclosedNodeList(row) for row in values])
@@ -108,7 +110,9 @@ pub fn values_list<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResul
                 Ok(())
             })
         })?;
-        if scope == SCOPE_SOURCE {
+        // The SELECT list and ON clauses are SCOPE_SOURCE too.
+        let is_operand = ctx.state.flags.in_expr || ctx.state.flags.in_projection;
+        if scope == SCOPE_SOURCE && !is_operand {
             let a = ctx.aliases.get(node)?;
             ctx.literal(" AS ");
             ctx.entity(&[&a])?;

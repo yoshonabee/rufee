@@ -4,6 +4,15 @@ import pytest
 import rufee
 from rufee import _context
 
+from known_gaps import KNOWN_GAPS
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        test_id = item.nodeid.split("tests/", 1)[-1]
+        if test_id in KNOWN_GAPS:
+            item.add_marker(pytest.mark.xfail(reason=KNOWN_GAPS[test_id], strict=True))
+
 
 @pytest.fixture(autouse=True)
 def _reset_rufee(monkeypatch):

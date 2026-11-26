@@ -232,6 +232,42 @@ def test_shadow_mismatch_param_count_differs(db, Item, monkeypatch, caplog):
     assert record.rufee["peewee_param_type"] is None
 
 
+def test_shadow_mismatch_without_sql(db, Item, monkeypatch, caplog):
+    rufee.configure(mode="shadow", log_sql=False)
+    q = Item.select().where(Item.name == "inlined-value")
+    monkeypatch.setattr(_context._native, "render",
+                        lambda *a, **k: ("SELECT 'inlined-value'", []))
+    with caplog.at_level(logging.WARNING, logger="rufee"):
+        db.get_sql_context().sql(q).query()
+    [record] = _rufee_records(caplog, "rufee: shadow mismatch")
+    assert "inlined-value" not in repr(record.__dict__)
+    details = record.rufee
+    assert details["diff"] == "sql"
+    assert details["offset"] == len("SELECT ")
+    assert details["rust_param_count"] == 0
+    assert details["peewee_param_count"] == 1
+    assert not {"rust_sql", "peewee_sql", "rust_excerpt", "peewee_excerpt"} & details.keys()
+
+
+def test_params_mismatch_without_sql(db, Item, monkeypatch, caplog):
+    rufee.configure(mode="shadow", log_sql=False)
+    q = Item.select().where(Item.qty == 5)
+    sql, _params = _reference(q)
+    monkeypatch.setattr(_context._native, "render", lambda *a, **k: (sql, [6]))
+    with caplog.at_level(logging.WARNING, logger="rufee"):
+        db.get_sql_context().sql(q).query()
+    [record] = _rufee_records(caplog, "rufee: shadow mismatch")
+    assert "sql" not in record.rufee
+    assert record.rufee["param_index"] == 0
+
+
+def test_log_sql_env(monkeypatch):
+    monkeypatch.setenv("RUFEE_LOG_SQL", "0")
+    assert _context._env_log_sql() is False
+    monkeypatch.delenv("RUFEE_LOG_SQL")
+    assert _context._env_log_sql() is True
+
+
 def test_shadow_mismatch_long_sql_is_clipped(db, Item, monkeypatch, caplog):
     rufee.configure(mode="shadow")
     monkeypatch.setattr(_context._native, "render",

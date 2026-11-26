@@ -128,14 +128,33 @@ Their details are in one `extra` attribute, `record.rufee`, a dict:
 | `callsite` | both | `file:line in function` of the first frame outside peewee, playhouse and rufee: the application code that ran the query |
 | `error` | renderer error | `ExceptionType: message` |
 | `diff` | mismatch | `"sql"` or `"params"` |
-| `offset`, `rust_excerpt`, `peewee_excerpt` | mismatch, `diff="sql"` | first differing character and 60 characters either side |
-| `rust_sql`, `peewee_sql` | mismatch, `diff="sql"` | both full statements (placeholders, no values), clipped at 4000 characters |
-| `sql`, `param_index`, `rust_param_count`, `peewee_param_count`, `rust_param_type`, `peewee_param_type` | mismatch, `diff="params"` | where the parameter lists first differ |
+| `offset`, `rust_sql_length`, `peewee_sql_length`, `rust_param_count`, `peewee_param_count` | mismatch, `diff="sql"` | first differing character, both lengths, both parameter counts |
+| `rust_excerpt`, `peewee_excerpt` | mismatch, `diff="sql"`, `log_sql` on | 60 characters either side of the first difference |
+| `rust_sql`, `peewee_sql` | mismatch, `diff="sql"`, `log_sql` on | both full statements, clipped at 4000 characters |
+| `param_index`, `rust_param_count`, `peewee_param_count`, `rust_param_type`, `peewee_param_type` | mismatch, `diff="params"` | where the parameter lists first differ |
+| `sql` | mismatch, `diff="params"`, `log_sql` on | the statement both sides agree on |
 
-**Parameter values are never logged**, only their position, count and type: they
-are user data. The SQL strings carry placeholders, but an application that
-inlines values with `SQL("...")` or renders with `value_literals` will have
-those values in `rust_sql` / `peewee_sql`.
+#### Do the logs contain user data?
+
+**Parameter values are never logged**, only their position, count and type.
+
+The SQL strings normally contain no values either. That is not because rufee
+redacts them: peewee (and rufee) render every value as a placeholder (`%s`,
+`?`) and return the values separately, and the database driver fills them in
+afterwards, just before sending the query. rufee never sees the final string.
+
+SQL strings do contain values in three cases:
+
+| case | where the value shows up |
+|---|---|
+| the application inlines it: `SQL("... = 'x'")`, string formatting into `SQL()`, `value_literals=True` | both `rust_sql` and `peewee_sql` |
+| the mismatch *is* Rust inlining a value instead of emitting a placeholder | `rust_sql`, `rust_excerpt`; tell-tale: `rust_param_count < peewee_param_count` |
+| a Rust-only exception message (`rufee: renderer error`, `error`) | unlikely (the messages come from rufee, not from data), not guaranteed |
+
+If the logs must not carry any of that, turn the strings off with
+`RUFEE_LOG_SQL=0` or `rufee.configure(log_sql=False)`. Mismatch records then keep
+`callsite`, `offset`, lengths, counts and types; reproduce the query from the
+`callsite` to see the SQL (see *Triaging a mismatch*).
 
 With a structured logging setup (structlog's `ProcessorFormatter`, a JSON
 formatter that copies record attributes) the dict shows up as a nested `rufee`
@@ -182,7 +201,8 @@ monthly jobs):
 
 1. Group warnings by `callsite` and `query_type`: one bad shape usually repeats
    on every request that reaches it.
-2. Compare `rust_excerpt` and `peewee_excerpt`. Many mismatches are
+2. Compare `rust_excerpt` and `peewee_excerpt` (or, with `log_sql` off,
+   reproduce first and compare the two renders). Many mismatches are
    semantically equivalent (an extra pair of parentheses) but still bugs:
    rufee's contract is byte-identical output.
 3. Reproduce without data. In a shell with the application's models:

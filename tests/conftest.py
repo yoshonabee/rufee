@@ -19,6 +19,7 @@ def _reset_rufee(monkeypatch):
     """Every test starts in rust mode with fallback on, version ok, zero stats."""
     monkeypatch.setattr(_context._config, "mode", _context.MODE_RUST)
     monkeypatch.setattr(_context._config, "fallback", True)
+    monkeypatch.setattr(_context._config, "log_sql", True)
     monkeypatch.setattr(_context._config, "version_ok", True)
     rufee.stats.reset()
     yield

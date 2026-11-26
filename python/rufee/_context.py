@@ -32,6 +32,8 @@ MODE_OFF = "off"        # pure pass-through to peewee
 class _Config:
     mode: str = MODE_RUST
     fallback: bool = True
+    # Whether mismatch logs carry the SQL strings (see _mismatch_details).
+    log_sql: bool = True
     # Set when peewee's version is outside the supported range.
     version_ok: bool = True
 
@@ -80,15 +82,26 @@ def _env_fallback() -> bool:
     return os.environ.get("RUFEE_FALLBACK", "1") not in ("0", "false", "no")
 
 
-def configure(*, mode: str | None = None, fallback: bool | None = None) -> None:
+def _env_log_sql() -> bool:
+    return os.environ.get("RUFEE_LOG_SQL", "1") not in ("0", "false", "no")
+
+
+def configure(
+    *,
+    mode: str | None = None,
+    fallback: bool | None = None,
+    log_sql: bool | None = None,
+) -> None:
     """Change how :class:`Context` behaves.
 
     ``mode``: ``"rust"`` (default), ``"shadow"`` or ``"off"``.
     ``fallback``: when ``False`` (strict), an unsupported node raises
     :class:`rufee.Unsupported` instead of falling back to peewee.
+    ``log_sql``: when ``False``, shadow-mismatch logs leave out the SQL strings
+    and excerpts and keep only positions, lengths, counts and types.
 
-    Defaults come from the ``RUFEE_MODE`` and ``RUFEE_FALLBACK`` environment
-    variables.
+    Defaults come from the ``RUFEE_MODE``, ``RUFEE_FALLBACK`` and
+    ``RUFEE_LOG_SQL`` environment variables.
     """
     if mode is not None:
         if mode not in (MODE_RUST, MODE_SHADOW, MODE_OFF):
@@ -96,6 +109,8 @@ def configure(*, mode: str | None = None, fallback: bool | None = None) -> None:
         _config.mode = mode
     if fallback is not None:
         _config.fallback = bool(fallback)
+    if log_sql is not None:
+        _config.log_sql = bool(log_sql)
 
 
 def _check_version() -> None:
@@ -152,8 +167,14 @@ def _clip(sql: str) -> str:
 def _mismatch_details(query, rust, ref) -> dict:
     """What differs between the Rust and the peewee render, without parameter values.
 
-    Parameter values are user data (emails, addresses, tokens) and never logged;
-    only their position, count and type are. The SQL itself carries placeholders.
+    Parameter values are user data (emails, addresses, tokens) and are never
+    copied into the log; only their position, count and type are. The SQL
+    strings normally contain no values either, because peewee renders every
+    value as a placeholder and the database driver fills them in later. They
+    do contain values the application inlined itself (``SQL("... 'x'")``,
+    ``value_literals``), and a Rust bug that inlines a value instead of
+    emitting a placeholder shows up in ``rust_sql``. ``log_sql=False`` drops
+    the strings for applications that cannot accept that.
     """
     rsql, rparams = rust
     psql, pparams = ref
@@ -161,28 +182,36 @@ def _mismatch_details(query, rust, ref) -> dict:
     if rsql != psql:
         n = min(len(rsql), len(psql))
         pos = next((i for i in range(n) if rsql[i] != psql[i]), n)
-        start = max(0, pos - _SQL_EXCERPT)
         details.update(
             diff="sql",
             offset=pos,
-            rust_excerpt=rsql[start:pos + _SQL_EXCERPT],
-            peewee_excerpt=psql[start:pos + _SQL_EXCERPT],
-            rust_sql=_clip(rsql),
-            peewee_sql=_clip(psql),
+            rust_sql_length=len(rsql),
+            peewee_sql_length=len(psql),
+            rust_param_count=len(rparams),
+            peewee_param_count=len(pparams),
         )
+        if _config.log_sql:
+            start = max(0, pos - _SQL_EXCERPT)
+            details.update(
+                rust_excerpt=rsql[start:pos + _SQL_EXCERPT],
+                peewee_excerpt=psql[start:pos + _SQL_EXCERPT],
+                rust_sql=_clip(rsql),
+                peewee_sql=_clip(psql),
+            )
         return details
     rparams, pparams = list(rparams), list(pparams)
     n = min(len(rparams), len(pparams))
     index = next((i for i in range(n) if rparams[i] != pparams[i]), n)
     details.update(
         diff="params",
-        sql=_clip(psql),
         param_index=index,
         rust_param_count=len(rparams),
         peewee_param_count=len(pparams),
         rust_param_type=type(rparams[index]).__name__ if index < len(rparams) else None,
         peewee_param_type=type(pparams[index]).__name__ if index < len(pparams) else None,
     )
+    if _config.log_sql:
+        details["sql"] = _clip(psql)
     return details
 
 
@@ -258,4 +287,5 @@ class Context(_PeeweeContext):
 
 _config.mode = _env_mode()
 _config.fallback = _env_fallback()
+_config.log_sql = _env_log_sql()
 _check_version()

@@ -10,6 +10,9 @@ Observability for shadow-mode rollouts. Rendering is unchanged.
   strings with an excerpt around the first difference, or the position, count
   and type of the first differing parameter. **Parameter values are no longer
   logged**; 0.2.0 printed both parameter lists.
+- `RUFEE_LOG_SQL=0` / `rufee.configure(log_sql=False)` leaves the SQL strings
+  out of mismatch logs too. They normally hold placeholders, not values, but an
+  application that inlines values, or a Rust bug that does, puts them there.
 - A Rust error on a query peewee renders fine is logged at WARNING as
   `rufee: renderer error` (query class, call site, exception). It was DEBUG
   only. Errors peewee raises too stay at DEBUG.

@@ -156,13 +156,14 @@ through rufee on sqlite and MySQL.
 
 ## Configure
 
-Three environment variables, all read **once at import time**:
+Four environment variables, all read **once at import time**:
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `RUFEE_MODE` | `rust` | `rust` renders in Rust; `shadow` renders both ways, logs any difference and returns peewee's result; `off` is a pure pass-through. An unrecognised value warns and falls back to `rust`. |
 | `RUFEE_FALLBACK` | `1` | `0` / `false` / `no` makes an unsupported node raise `rufee.Unsupported` instead of re-rendering with peewee. Strict mode — for tests, not for production. |
 | `RUFEE_FORCE` | unset | `1` runs rufee against an unsupported peewee version anyway. See below. |
+| `RUFEE_LOG_SQL` | `1` | `0` / `false` / `no` leaves the SQL strings out of shadow-mismatch logs. The strings normally hold placeholders, not values; see [Do the logs contain user data?](migration-guide.md#do-the-logs-contain-user-data). |
 
 Because they are read at import, setting `RUFEE_MODE` after `import rufee` has
 no effect. Change it at runtime through the API instead:
@@ -170,6 +171,7 @@ no effect. Change it at runtime through the API instead:
 ```python
 rufee.configure(mode='shadow')   # or mode='rust' / 'off'
 rufee.configure(fallback=False)  # strict
+rufee.configure(log_sql=False)   # no SQL strings in mismatch logs
 ```
 
 Counters live in `rufee.stats` (`rust`, `fallback`, `errors`, `shadow`,

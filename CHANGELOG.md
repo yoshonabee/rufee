@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Postgres is a tested backend: peewee's suite runs on Postgres 17 through
+  psycopg2 and psycopg 3 in CI, strict 100%.
+- `playhouse.postgres_ext` renders in Rust: `JsonLookup` (`data['a']['b']`),
+  `JsonPath` (`data.path(...)`), `ObjectSlice` (array indexes and slices) and
+  `ArrayValue` (array comparisons and `contains*`). They used to fall back to
+  peewee.
+- Python 3.14 is tested in CI and listed in the classifiers.
+- The dev extras add `psycopg2-binary`, `psycopg[binary]` and `apsw`, so the
+  sqlite lane also runs peewee's APSW tests.
+
 ## 0.2.1
 
 Observability for shadow-mode rollouts. Rendering is unchanged.

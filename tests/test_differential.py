@@ -2,7 +2,7 @@
 
 A small hypothesis grammar builds random peewee query trees (selects with joins,
 subqueries, compound selects, inserts, updates, deletes, ...). Each generated
-query is rendered by both renderers under sqlite and MySQL context options and
+query is rendered by both renderers under sqlite, MySQL and Postgres context options and
 the SQL string plus the parameter list (values *and* their Python types) must be
 identical.
 
@@ -30,7 +30,7 @@ import peewee
 import pytest
 from hypothesis import HealthCheck, assume, event, given, settings, strategies as st
 from peewee import JOIN, SQL, Case, Table, Value, ValuesList, fn
-from playhouse import sqlite_ext
+from playhouse import postgres_ext, sqlite_ext
 from playhouse.mysql_ext import MySQLJSONField
 
 import rufee
@@ -78,6 +78,7 @@ JOIN_TARGETS = {User: [Tweet], Tweet: [User, Note], Note: [Tweet]}
 DIALECTS = {
     "sqlite": peewee.SqliteDatabase(":memory:").get_context_options(),
     "mysql": peewee.MySQLDatabase(None).get_context_options(),
+    "postgres": peewee.PostgresqlDatabase(None).get_context_options(),
 }
 
 # --------------------------------------------------------------------------- #
@@ -95,7 +96,16 @@ def _render(ctx_cls, query, opts, **extra):
 
 
 def _typed(params):
-    return [(type(v), v) for v in params]
+    return [(type(v), _unwrap(v)) for v in params]
+
+
+def _unwrap(v):
+    # psycopg's Json / Jsonb adapters define no __eq__; compare what they wrap.
+    if type(v).__name__ in ("Json", "Jsonb"):
+        for attr in ("adapted", "obj"):
+            if hasattr(v, attr):
+                return getattr(v, attr)
+    return v
 
 
 def check(strategy: str, query, dialect: str, **extra) -> None:
@@ -870,7 +880,12 @@ def test_representative_queries(name, dialect):
     rufee.stats.reset()
     query = REPRESENTATIVE[name]
     opts = DIALECTS[dialect]
-    expected = _render(peewee.Context, query, opts)
+    try:
+        expected = _render(peewee.Context, query, opts)
+    except Exception as exc:  # noqa: BLE001 - e.g. ON CONFLICT REPLACE on postgres
+        with pytest.raises(type(exc)):
+            _render(rufee.Context, query, opts)
+        return
     try:
         got = _render(rufee.Context, query, opts)
     except rufee.Unsupported as exc:
@@ -891,6 +906,7 @@ def test_representative_queries(name, dialect):
 JSON_DBS = {
     "sqlite": peewee.SqliteDatabase(":memory:"),
     "mysql": peewee.MySQLDatabase(None),
+    "postgres": postgres_ext.PostgresqlExtDatabase(None),
 }
 
 
@@ -904,6 +920,7 @@ def _json_model(name, db, field_cls=peewee.JSONField):
 JSON_MODELS = {
     "sqlite": _json_model("SqliteDoc", JSON_DBS["sqlite"]),
     "mysql": _json_model("MySQLDoc", JSON_DBS["mysql"], MySQLJSONField),
+    "postgres": _json_model("PgDoc", JSON_DBS["postgres"]),
 }
 MARIADB_DOC = _json_model("MariaDoc", peewee.MySQLDatabase(None, mariadb=True))
 
@@ -976,6 +993,65 @@ def test_json_queries(dialect, name):
     rufee.stats.reset()
     query = JSON_REPRESENTATIVE[dialect][name]
     opts = DIALECTS[dialect]
+    expected = _render(peewee.Context, query, opts)
+    got = _render(rufee.Context, query, opts)
+    assert rufee.stats.rust == 1
+    assert got[0] == expected[0]
+    assert _typed(got[1]) == _typed(expected[1])
+
+
+# --------------------------------------------------------------------------- #
+# playhouse.postgres_ext
+# --------------------------------------------------------------------------- #
+
+
+class PgExtDoc(peewee.Model):
+    data = postgres_ext.JSONField()
+    bdata = postgres_ext.BinaryJSONField()
+    tags = postgres_ext.ArrayField(peewee.CharField)
+    grid = postgres_ext.ArrayField(peewee.IntegerField, dimensions=2)
+    n = peewee.IntegerField()
+
+    class Meta:
+        database = JSON_DBS["postgres"]
+
+
+_pd, _pb, _pt, _pg = PgExtDoc.data, PgExtDoc.bdata, PgExtDoc.tags, PgExtDoc.grid
+PG_EXT_REPRESENTATIVE = {
+    # JsonLookup: inlined keys, ->> on the last key unless as_json().
+    "lookup_text": PgExtDoc.select(_pd["a"], _pd["a"]["b"][0]).where(_pd["k"] == "v"),
+    "lookup_as_json": PgExtDoc.select(_pb["a"]["b"].as_json(), _pb["a"].as_json()),
+    "lookup_quoted_key": PgExtDoc.select(_pd["it's"], _pb['q"k']),
+    "lookup_node_key": PgExtDoc.select(_pb[PgExtDoc.n], _pb["a"][fn.lower("X")]),
+    "lookup_group_by": PgExtDoc.select(_pd["k"], fn.COUNT(PgExtDoc.id)).group_by(_pd["k"]).order_by(_pd["k"]),
+    "lookup_cast": PgExtDoc.select(_pb["n"].cast("int")).where(_pb["n"].cast("int") > 1),
+    "lookup_join": PgExtDoc.select().join(User, on=(_pb["user"].cast("int") == User.id)),
+    # JsonPath: #> '{a,0}' / #>> '{a,0}'.
+    "path": PgExtDoc.select(_pd.path("a", 0), _pb.path("a", "b").as_json(), _pb.path()),
+    "path_in_where": PgExtDoc.select().where(_pb.path("a", "b") == "x"),
+    # BinaryJSONField operators built on lookups and paths.
+    "jsonb_contains": PgExtDoc.select().where(_pb.contains({"a": 1}) | _pb["a"].contains([1]) | _pb.contained_by({"a": 1, "b": 2})),
+    "jsonb_keys": PgExtDoc.select().where(_pb.has_key("a") & _pb["a"].contains_any("x", "y") & _pb.contains_all("p", "q")),
+    "jsonb_update": PgExtDoc.update({PgExtDoc.bdata: _pb.concat({"a": 1})}).where(PgExtDoc.id == 1),
+    "jsonb_remove": PgExtDoc.update({PgExtDoc.bdata: _pb.remove("a", "b")}),
+    "jsonb_path_ops": PgExtDoc.select(_pb.path_query("$.a[*]")).where(_pb.path_exists("$.a") & _pb["x"].path_match("$ > 1")),
+    "jsonb_length": PgExtDoc.select(_pb["arr"].length(), _pb.extract("a", "b")),
+    # ArrayValue: AsIs(value)::<type>[], ObjectSlice: 1-based indexes.
+    "array_compare": PgExtDoc.select().where((_pt == ["a", "b"]) | (_pt != ["c"]) | (_pg == [[1, 2], [3, 4]])),
+    "array_contains": PgExtDoc.select().where(_pt.contains("a", "b") & _pt.contains_any("c") & _pt.contained_by("a", "b", "c")),
+    "array_index_slice": PgExtDoc.select(_pt[0], _pt[1:3], _pt[:2], _pt["2:4"], _pg[0][1:]).where(_pt[0] == "a"),
+    "array_node_index": PgExtDoc.select(_pt[PgExtDoc.n], _pt[PgExtDoc.n + 1]),
+    "array_insert": PgExtDoc.insert(tags=["a", "b"], grid=[[1]], data={"a": 1}, bdata={"b": [1, 2]}, n=_pt[0].cast("int")),
+    "array_update": PgExtDoc.update(tags=postgres_ext.ArrayValue(_pt, ["x"])).where(_pt.contains("y")),
+}
+
+
+@pytest.mark.parametrize("name", sorted(PG_EXT_REPRESENTATIVE))
+def test_postgres_ext_queries(name):
+    rufee.configure(fallback=False)
+    rufee.stats.reset()
+    query = PG_EXT_REPRESENTATIVE[name]
+    opts = JSON_DBS["postgres"].get_context_options()
     expected = _render(peewee.Context, query, opts)
     got = _render(rufee.Context, query, opts)
     assert rufee.stats.rust == 1

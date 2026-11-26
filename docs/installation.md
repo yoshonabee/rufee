@@ -22,8 +22,9 @@ renders SQL.
 
 CI builds wheels on every `v*` tag — job `wheels` in `.github/workflows/release.yml`,
 one artifact per platform (linux `x86_64`, linux `aarch64`, macOS `arm64`).
-Until they are attached to a [GitHub release](https://github.com/yoshonabee/rufee/releases)
-or published to PyPI, download them from that tag's workflow run:
+From v0.2.0 on, the same files are attached to each
+[GitHub release](https://github.com/yoshonabee/rufee/releases) and published to
+PyPI. For older tags, download them from that tag's workflow run:
 
 ```sh
 gh run download --repo yoshonabee/rufee --name wheels-ubuntu-latest-x86_64

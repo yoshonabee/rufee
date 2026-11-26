@@ -73,3 +73,24 @@ jobs:
           path: dist
       - run: ls -l dist
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    # Attach the same files to the GitHub release. Works whether the tag came
+    # from publishing a release in the UI (release exists) or from a plain
+    # `git push` of the tag (release is created here).
+    needs: [publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - name: create release if missing
+        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+      - run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber

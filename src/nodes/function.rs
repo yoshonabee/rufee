@@ -28,10 +28,20 @@ pub fn function<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<(
             None
         };
         let n = args.len();
+        // peewee 4: a lone SelectBase argument of a subquery function (EXISTS,
+        // ANY, ...) is rendered bare, the function's parentheses enclose it.
+        // With an ORDER BY the last argument is wrapped in a NodeList.
+        let bare = n == 1
+            && order_by.is_none()
+            && isa(&args[0], &ctx.c.select_base)?
+            && node
+                .getattr(intern!(py, "subquery_functions"))?
+                .contains(name.to_lowercase())?;
         ctx.with(
             Over::default()
                 .in_function(true)
-                .function_arg_count(Some(n)),
+                .function_arg_count(Some(n))
+                .bare_subquery(bare),
             |ctx| function_args(ctx, &args, order_by.as_ref()),
         )?;
     }

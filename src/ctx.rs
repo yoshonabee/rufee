@@ -42,6 +42,9 @@ pub struct Flags {
     pub in_function: bool,
     pub function_arg_count: Option<usize>,
     pub subquery: bool,
+    /// Set by `Function` for a lone subquery argument of EXISTS / ANY / ...:
+    /// the function's own parentheses enclose the query.
+    pub bare_subquery: bool,
     pub is_fk_expr: bool,
     pub value_literals: bool,
 }
@@ -111,6 +114,7 @@ impl Flags {
             in_function: opt_bool(d, "in_function")?,
             function_arg_count,
             subquery: opt_bool(d, "subquery")?,
+            bare_subquery: opt_bool(d, "bare_subquery")?,
             is_fk_expr: opt_bool(d, "is_fk_expr")?,
             value_literals: opt_bool(d, "value_literals")?,
         })
@@ -143,6 +147,7 @@ pub struct Over {
     pub in_function: Option<bool>,
     pub function_arg_count: Option<Option<usize>>,
     pub subquery: Option<bool>,
+    pub bare_subquery: Option<bool>,
     pub is_fk_expr: Option<bool>,
     pub value_literals: Option<bool>,
 }
@@ -174,6 +179,10 @@ impl Over {
     }
     pub fn subquery(mut self, v: bool) -> Self {
         self.subquery = Some(v);
+        self
+    }
+    pub fn bare_subquery(mut self, v: bool) -> Self {
+        self.bare_subquery = Some(v);
         self
     }
     pub fn is_fk_expr(mut self, v: bool) -> Self {
@@ -254,21 +263,41 @@ impl AliasManager {
         if self.current > self.mapping.len() {
             self.mapping.push(PyDict::new(py).unbind());
             self.by_id.push(HashMap::new());
-        } else {
-            // peewee's pop() leaves the old dict in place but a fresh push()
-            // must not see stale identity entries... it does see the stale
-            // *dict* entries though (peewee never clears them), so keep both
-            // views consistent by leaving by_id alone as well.
         }
+        // A reused level is empty: peewee 4's pop() clears it.
     }
 
-    pub fn pop(&mut self) -> PyResult<()> {
+    pub fn pop(&mut self, py: Python<'_>) -> PyResult<()> {
         if self.current == 1 {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "Cannot pop() from empty alias manager.",
             ));
         }
+        self.mapping[self.current - 1].bind(py).clear();
+        self.by_id[self.current - 1].clear();
         self.current -= 1;
+        Ok(())
+    }
+
+    /// `dict(alias_manager.mapping)`: a copy of the current level.
+    pub fn snapshot<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyDict>, HashMap<usize, String>)> {
+        Ok((self.map(py).copy()?, self.by_id[self.current - 1].clone()))
+    }
+
+    /// `alias_manager.mapping.update(snapshot)`.
+    pub fn seed(
+        &mut self,
+        py: Python<'_>,
+        snap: &(Bound<'_, PyDict>, HashMap<usize, String>),
+    ) -> PyResult<()> {
+        self.map(py).update(snap.0.as_mapping())?;
+        let ids = &mut self.by_id[self.current - 1];
+        for (k, v) in &snap.1 {
+            ids.insert(*k, v.clone());
+        }
         Ok(())
     }
 }
@@ -362,6 +391,9 @@ impl<'py> Ctx<'py> {
         if let Some(v) = over.subquery {
             st.flags.subquery = v;
         }
+        if let Some(v) = over.bare_subquery {
+            st.flags.bare_subquery = v;
+        }
         if let Some(v) = over.is_fk_expr {
             st.flags.is_fk_expr = v;
         }
@@ -389,7 +421,7 @@ impl<'py> Ctx<'py> {
     {
         self.aliases.push(self.py);
         let r = body(self);
-        self.aliases.pop()?;
+        self.aliases.pop(self.py)?;
         r
     }
 
@@ -485,6 +517,7 @@ impl<'py> Ctx<'py> {
         kwargs.set_item("in_function", fl.in_function)?;
         kwargs.set_item("function_arg_count", fl.function_arg_count)?;
         kwargs.set_item("subquery", fl.subquery)?;
+        kwargs.set_item("bare_subquery", fl.bare_subquery)?;
         kwargs.set_item("is_fk_expr", fl.is_fk_expr)?;
         kwargs.set_item("value_literals", fl.value_literals)?;
         let pctx = self.c.context.bind(py).call((), Some(&kwargs))?;

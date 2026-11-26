@@ -14,7 +14,6 @@ non-strict xfails and are removed once every gap is fixed.
 OPERATORS = "MySQL CONCAT() instead of || (peewee 4.5)"
 ORDERING = "Ordering.collate() renders COLLATE before the direction"
 FOR_UPDATE = "FOR UPDATE was reworked (no _for_update_of etc.)"
-COMPOUND = "compound select parentheses / alias scoping changed"
 VALUE_LITERALS = "value_literals escapes single quotes"
 
 KNOWN_GAPS = {
@@ -30,9 +29,6 @@ KNOWN_GAPS = {
     "test_options.py::test_for_update_variants[kwargs2-FOR UPDATE NOWAIT]": FOR_UPDATE,
     "test_options.py::test_for_update_variants[kwargs3-FOR UPDATE OF `t1`]": FOR_UPDATE,
     "test_options.py::test_for_update_variants[kwargs4-FOR SHARE OF `t1` NOWAIT]": FOR_UPDATE,
-    "test_differential.py::test_representative_queries[union_all_intersect-sqlite]": COMPOUND,
-    "test_options.py::test_compound_select_parentheses_modes[sqlite-0]": COMPOUND,
-    "test_options.py::test_compound_select_parentheses_modes[mysql-0]": COMPOUND,
     "test_options.py::test_value_literals_types": VALUE_LITERALS,
 }
 

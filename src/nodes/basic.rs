@@ -382,7 +382,10 @@ pub fn star<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
 pub fn qualified_names<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = ctx.py;
     let inner = node.getattr(intern!(py, "node"))?;
-    ctx.with(Over::default().scope(SCOPE_COLUMN), |ctx| ctx.sql(&inner))
+    // peewee 4: the scope is a constructor argument (SCOPE_COLUMN by default,
+    // SCOPE_NORMAL from `qualify_names()`).
+    let scope: u8 = node.getattr(intern!(py, "_scope"))?.extract()?;
+    ctx.with(Over::default().scope(scope), |ctx| ctx.sql(&inner))
 }
 
 // NamespaceAttribute.__sql__

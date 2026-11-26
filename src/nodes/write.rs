@@ -339,8 +339,12 @@ pub fn insert<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
             let conflict_update = ctx.dialect.conflict_update.clone();
             let upd = conflict_hook(ctx, &conflict_update, &on_conflict, node)?;
             if !upd.is_none() {
-                ctx.literal(" ");
-                ctx.sql(&upd)?;
+                // peewee 4 renders the update with `subquery=True`, so a
+                // sub-select in a SET value keeps its parentheses.
+                ctx.with(Over::default().subquery(true), |ctx| {
+                    ctx.literal(" ");
+                    ctx.sql(&upd)
+                })?;
             }
         }
         apply_returning(ctx, node)

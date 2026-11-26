@@ -27,11 +27,13 @@ pub fn function<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<(
         } else {
             None
         };
-        let n = args.len();
+        // bare = (len(args) == 1 and isinstance(args[0], SelectBase) and
+        //         self.name.lower() in self.subquery_functions)
+        // (The cheap name test runs first; none of the checks has side effects.)
+        let bare =
+            args.len() == 1 && is_subquery_function(&name) && isa(&args[0], &ctx.c.select_base)?;
         ctx.with(
-            Over::default()
-                .in_function(true)
-                .function_arg_count(Some(n)),
+            Over::default().in_function(true).bare_subquery(bare),
             |ctx| function_args(ctx, &args, order_by.as_ref()),
         )?;
     }
@@ -43,6 +45,14 @@ pub fn function<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<(
         ctx.literal(")");
     }
     Ok(())
+}
+
+/// `Function.subquery_functions`: functions whose lone sub-select argument
+/// is written without its own parentheses, e.g. `EXISTS(SELECT ...)`.
+fn is_subquery_function(name: &str) -> bool {
+    ["exists", "any", "all", "some", "array"]
+        .iter()
+        .any(|f| name.eq_ignore_ascii_case(f))
 }
 
 /// The argument list of a function call:

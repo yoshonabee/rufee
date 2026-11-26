@@ -9,7 +9,7 @@ assignment to `Database.context_class`.
 
 | | |
 |---|---|
-| Python | CPython 3.11, 3.12 or 3.13. Wheels are built `abi3-py311`, so one wheel per platform covers all three. |
+| Python | CPython 3.11, 3.12, 3.13 or 3.14. Wheels are built `abi3-py311`, so one wheel per platform covers all of them. |
 | peewee | **4.5.x** (developed against 4.5.3). rufee reads peewee's private attributes; on any other version it turns itself off — see [Version gate](#version-gate). For peewee 3.17 use rufee 0.1.0. |
 | Platform | Linux `x86_64` / `aarch64`, macOS `arm64`. Anywhere else, build from source — you need a Rust stable toolchain. |
 

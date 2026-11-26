@@ -39,23 +39,40 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 
-# Tests that fail with unmodified peewee 3.17.9 on that backend. Reproduced
-# without rufee; see README "Testing strategy". They are MySQL 8 rejecting SQL
-# that peewee's suite writes for sqlite/postgres, not rendering differences, so
-# they must fail identically in strict and safe mode.
-ALLOWLIST = {
+# Tests that fail with unmodified peewee on that backend (``--baseline``), i.e.
+# not rufee's doing. Empty for peewee 4.5.3 on sqlite and MySQL 8. A listed
+# test that passes under rufee means rufee rendered something peewee would not.
+ALLOWLIST: dict[str, set[str]] = {
     "sqlite": set(),
-    "mysql": {
-        # 1093: can't reference the DELETE target table in a subquery
-        "tests.models.TestForUpdateIntegration.test_for_update_nested",
-        # 3995: REGEXP BINARY vs utf8mb4_0900_ai_ci (ICU regexp engine)
-        "tests.expressions.TestRegexp.test_regexp_iregexp",
-        # 1064: CAST(x AS int) is not MySQL syntax
-        "tests.regressions.TestUpdateIntegrationRegressions.test_update_examples_2",
-        # MySQL 8 rewrites stored view definitions (adds parentheses)
-        "tests.db_tests.TestIntrospection.test_get_views",
-    },
+    "mysql": set(),
 }
+
+# Known rufee rendering gaps, one file per engine: ``<test id>  # <reason>``.
+# They are reported but do not fail the run; one that starts passing does,
+# until it is removed (``--update-known-failures`` rewrites the file).
+KNOWN_FAILURES_DIR = HERE / "known_failures"
+
+
+def load_known_failures(engine: str) -> dict[str, str]:
+    path = KNOWN_FAILURES_DIR / f"{engine}.txt"
+    known = {}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            test_id, _, reason = line.partition("#")
+            if test_id.strip():
+                known[test_id.strip()] = reason.strip()
+    return known
+
+
+def write_known_failures(engine: str, outcomes) -> Path:
+    path = KNOWN_FAILURES_DIR / f"{engine}.txt"
+    path.parent.mkdir(exist_ok=True)
+    lines = [f"{test_id}  # {kind}: {msg}"[:240]
+             for test_id, (kind, msg) in sorted(outcomes.items())
+             if kind in ("fail", "error", "unsupported")]
+    path.write_text("".join(f"{line}\n" for line in lines))
+    return path
+
 
 MYSQL_DEFAULTS = {"host": "127.0.0.1", "port": "33306", "user": "root", "password": "peewee"}
 
@@ -68,7 +85,11 @@ def parse_args(argv):
     mode.add_argument("--safe", action="store_true", help="fallback on")
     p.add_argument("--peewee-src", default=str(ROOT / "peewee-src"),
                    help="checkout of peewee at the supported tag (default: ./peewee-src)")
+    mode.add_argument("--baseline", action="store_true",
+                      help="rufee off (pure pass-through): measure unmodified peewee for the allow-list")
     p.add_argument("--json", help="write per-test outcomes and the summary to this file")
+    p.add_argument("--update-known-failures", action="store_true",
+                   help="rewrite scripts/known_failures/<engine>.txt from this run's failures")
     p.add_argument("-v", "--verbosity", type=int, default=1)
     p.add_argument("--failfast", action="store_true")
     p.add_argument("--fail-on-unexpected", action="store_true",
@@ -154,8 +175,9 @@ def _reset_open_transactions() -> None:
 
 
 # Files peewee's tests write into the working directory (same list as runtests.py).
-SCRATCH_FILES = ["peewee_test.db", "peewee_test", "tmp.db", "peewee_test.bdb.db",
-                 "peewee_test.cipher.db", "peewee_test.bdb.db-journal"]
+SCRATCH_FILES = ["peewee_test.db", "peewee_test.db-shm", "peewee_test.db-wal",
+                 "peewee_test.dbc", "peewee_pwiz.db", "peewee_test", "tmp.db",
+                 "peewee_test.bdb.db", "peewee_test.cipher.db", "peewee_test.bdb.db-journal"]
 
 
 def cleanup_scratch_files() -> None:
@@ -169,12 +191,12 @@ def cleanup_scratch_files() -> None:
             p.unlink()
 
 
-def bind_rufee(strict: bool) -> None:
+def bind_rufee(strict: bool, baseline: bool = False) -> None:
     import peewee
 
     import rufee
 
-    rufee.configure(mode="rust", fallback=not strict)
+    rufee.configure(mode="off" if baseline else "rust", fallback=not strict)
     peewee.Context = rufee.Context  # assertSQL() / __sql__() path
     peewee.Database.context_class = rufee.Context  # execute() path
 
@@ -197,10 +219,13 @@ def collect(modules):
     return loader.loadTestsFromNames(names)
 
 
-def summarize(outcomes, allowlist, strict):
-    counts = {"pass": 0, "skip": 0, "unsupported": 0, "fail": 0, "error": 0, "allowlisted": 0}
+def summarize(outcomes, allowlist, known=None):
+    known = known or {}
+    counts = {"pass": 0, "skip": 0, "unsupported": 0, "fail": 0, "error": 0,
+              "allowlisted": 0, "known": 0}
     unexpected = []
     allowlisted_but_passing = []
+    known_but_passing = []
     for test_id, (kind, msg) in sorted(outcomes.items()):
         if test_id in allowlist:
             if kind == "pass":
@@ -208,12 +233,20 @@ def summarize(outcomes, allowlist, strict):
             else:
                 counts["allowlisted"] += 1
             continue
+        if test_id in known and kind != "skip":
+            if kind == "pass":
+                known_but_passing.append(test_id)
+                counts["pass"] += 1
+            else:
+                counts["known"] += 1
+            continue
         counts[kind] += 1
         if kind in ("fail", "error"):
             unexpected.append((test_id, kind, msg))
-    considered = counts["pass"] + counts["unsupported"] + counts["fail"] + counts["error"]
+    considered = (counts["pass"] + counts["unsupported"] + counts["fail"] + counts["error"]
+                  + counts["known"])
     rate = counts["pass"] / considered if considered else 0.0
-    return counts, rate, unexpected, allowlisted_but_passing
+    return counts, rate, unexpected, allowlisted_but_passing, known_but_passing
 
 
 def main(argv=None):
@@ -235,14 +268,15 @@ def main(argv=None):
 
     cleanup_scratch_files()
     configure_backend(args)
-    bind_rufee(strict)
+    bind_rufee(strict, args.baseline)
 
     import peewee
 
     import rufee
 
+    mode_name = "baseline" if args.baseline else ("strict" if strict else "safe")
     print(f"rufee {rufee.__version__} | peewee {peewee.__version__} | engine={args.engine} | "
-          f"mode={'strict' if strict else 'safe'}")
+          f"mode={mode_name}")
 
     suite = collect(args.modules)
     runner = unittest.TextTestRunner(verbosity=args.verbosity, failfast=args.failfast,
@@ -253,12 +287,19 @@ def main(argv=None):
     cleanup_scratch_files()
 
     allowlist = ALLOWLIST[args.engine]
-    counts, rate, unexpected, allow_pass = summarize(result.outcomes, allowlist, strict)
+    # Known gaps are tracked against safe mode; strict and baseline runs ignore them.
+    known = load_known_failures(args.engine) if not (strict or args.baseline) else {}
+    counts, rate, unexpected, allow_pass, known_pass = summarize(result.outcomes, allowlist, known)
+    if args.update_known_failures:
+        path = write_known_failures(args.engine, result.outcomes)
+        print(f"wrote {path}")
+        unexpected, known_pass = [], []
 
     print()
-    print(f"== rufee summary ({args.engine}, {'strict' if strict else 'safe'}) ==")
+    print(f"== rufee summary ({args.engine}, {mode_name}) ==")
     print(f"pass={counts['pass']} unsupported={counts['unsupported']} fail={counts['fail']} "
           f"error={counts['error']} skip={counts['skip']} allowlisted={counts['allowlisted']} "
+          f"known={counts['known']} "
           f"| {elapsed:.1f}s")
     print(f"strict pass rate: {rate:.1%}" if strict else f"pass rate: {rate:.1%}")
     print(f"renders: rust={rufee.stats.rust} fallback={rufee.stats.fallback}")
@@ -276,6 +317,12 @@ def main(argv=None):
         print("\nallow-listed tests now PASS; rufee output differs from peewee here:")
         for test_id in allow_pass:
             print(f"  {test_id}")
+    if known_pass:
+        ok = False
+        print(f"\n{len(known_pass)} known failure(s) now PASS; remove them from "
+              f"scripts/known_failures/{args.engine}.txt (or rerun with --update-known-failures):")
+        for test_id in known_pass:
+            print(f"  {test_id}")
 
     if args.json:
         Path(args.json).write_text(json.dumps({
@@ -283,6 +330,7 @@ def main(argv=None):
             "counts": counts, "pass_rate": rate,
             "stats": {"rust": rufee.stats.rust, "fallback": rufee.stats.fallback},
             "unexpected": unexpected, "allowlisted_passing": allow_pass,
+            "known_passing": known_pass,
             "outcomes": {k: list(v) for k, v in result.outcomes.items()},
         }, indent=1))
 

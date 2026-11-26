@@ -1,5 +1,5 @@
 PY ?= .venv/bin/python
-PEEWEE_TAG ?= 3.17.9
+PEEWEE_TAG ?= 4.5.3
 
 .PHONY: venv dev test cargo-test lint peewee-src peewee-tests mysql-up mysql-down clean
 

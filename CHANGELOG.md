@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.1
+
+Observability for shadow-mode rollouts. Rendering is unchanged.
+
+- Shadow mismatches are logged with a fixed message, `rufee: shadow mismatch`,
+  and their details in `record.rufee`: query class, the application call site
+  (first frame outside peewee / playhouse / rufee), and either both full SQL
+  strings with an excerpt around the first difference, or the position, count
+  and type of the first differing parameter. **Parameter values are no longer
+  logged**; 0.2.0 printed both parameter lists.
+- `RUFEE_LOG_SQL=0` / `rufee.configure(log_sql=False)` leaves the SQL strings
+  out of mismatch logs too. They normally hold placeholders, not values, but an
+  application that inlines values, or a Rust bug that does, puts them there.
+- A Rust error on a query peewee renders fine is logged at WARNING as
+  `rufee: renderer error` (query class, call site, exception). It was DEBUG
+  only. Errors peewee raises too stay at DEBUG.
+- `rufee.stats.snapshot()` returns all counters in one read.
+- New [`docs/migration-guide.md`](docs/migration-guide.md): shadow → rust
+  rollout, what rufee logs and counts, exporting the counters, mismatch triage,
+  rollback.
+
 ## 0.2.0
 
 **Targets peewee 4.5.3. peewee 3.x is no longer supported**; stay on rufee

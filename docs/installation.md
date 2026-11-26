@@ -46,8 +46,12 @@ pip install --no-deps rufee-0.2.0-cp311-abi3-manylinux_2_17_x86_64.whl
 
 ### From PyPI
 
-Not published yet. Once it is, this becomes `pip install rufee` /
-`uv add rufee`, and the wheel sections above stop mattering.
+```sh
+pip install rufee        # or: uv add rufee
+```
+
+PyPI has the same wheels as the GitHub release, plus the sdist (which builds
+from source, so it needs Rust) for other platforms.
 
 ### From source
 
@@ -152,13 +156,14 @@ through rufee on sqlite and MySQL.
 
 ## Configure
 
-Three environment variables, all read **once at import time**:
+Four environment variables, all read **once at import time**:
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `RUFEE_MODE` | `rust` | `rust` renders in Rust; `shadow` renders both ways, logs any difference and returns peewee's result; `off` is a pure pass-through. An unrecognised value warns and falls back to `rust`. |
 | `RUFEE_FALLBACK` | `1` | `0` / `false` / `no` makes an unsupported node raise `rufee.Unsupported` instead of re-rendering with peewee. Strict mode — for tests, not for production. |
 | `RUFEE_FORCE` | unset | `1` runs rufee against an unsupported peewee version anyway. See below. |
+| `RUFEE_LOG_SQL` | `1` | `0` / `false` / `no` leaves the SQL strings out of shadow-mismatch logs. The strings normally hold placeholders, not values; see [Do the logs contain user data?](migration-guide.md#do-the-logs-contain-user-data). |
 
 Because they are read at import, setting `RUFEE_MODE` after `import rufee` has
 no effect. Change it at runtime through the API instead:
@@ -166,11 +171,16 @@ no effect. Change it at runtime through the API instead:
 ```python
 rufee.configure(mode='shadow')   # or mode='rust' / 'off'
 rufee.configure(fallback=False)  # strict
+rufee.configure(log_sql=False)   # no SQL strings in mismatch logs
 ```
 
 Counters live in `rufee.stats` (`rust`, `fallback`, `errors`, `shadow`,
-`mismatch`, plus `reset()`), and rufee logs on the `rufee` logger: shadow
-mismatches at `WARNING`, fallbacks at `DEBUG`.
+`mismatch`; `snapshot()` reads them all, `reset()` zeroes them), and rufee
+logs on the `rufee` logger: shadow mismatches and Rust errors on queries peewee
+renders fine at `WARNING`, every fallback at `DEBUG`. The WARNING records carry
+their details in `record.rufee`; see
+[the migration guide](migration-guide.md#what-rufee-reports) for the fields and
+for exporting the counters.
 
 ```python
 import logging
@@ -199,15 +209,11 @@ If `rufee.stats` stays all-zero, rufee is installed but not rendering: either
 
 ## Rolling out
 
-1. Deploy with `RUFEE_MODE=shadow`. Every query is rendered both ways, peewee's
-   result is the one used, so behaviour cannot change.
-2. Watch the `rufee` logger for `shadow mismatch` warnings and
-   `rufee.stats.mismatch`. Shadow mode renders twice, so expect it to be
-   *slower* than plain peewee — it is a correctness probe, not a benchmark.
-3. With no mismatches over real traffic, switch to `RUFEE_MODE=rust`.
-
-Keep `RUFEE_FALLBACK=1` (the default) in both steps: an unsupported node then
-re-renders through peewee, so incomplete coverage is slow, never wrong.
+Go through shadow mode first: deploy with `RUFEE_MODE=shadow`, where every
+query is rendered both ways and peewee's result is the one executed, watch for
+mismatches, then switch to `RUFEE_MODE=rust`. The full procedure, what to
+monitor, when to switch and how to roll back, is in
+[`migration-guide.md`](migration-guide.md).
 
 ## Version gate
 
@@ -232,7 +238,9 @@ import?
 
 **`stats.fallback` is climbing.** Some node type is not implemented in Rust, or
 the render raised. Both are logged at `DEBUG` on the `rufee` logger with the
-query class and the reason; turn that on to see which.
+query class and the reason; turn that on to see which. A Rust error on a query
+peewee renders fine is also logged at `WARNING` as `rufee: renderer error`,
+with the application's `callsite`.
 
 **pip: "not a supported wheel on this platform".** The wheel was built for a
 different platform tag — for `--compatibility linux` wheels, build and install

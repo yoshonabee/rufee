@@ -198,8 +198,9 @@ pub fn update<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
             })?;
         }
 
+        // peewee 4: `if self._where is not None` (3.x tested truthiness).
         let where_ = node.getattr(intern!(py, "_where"))?;
-        if where_.is_truthy()? {
+        if !where_.is_none() {
             ctx.with(Over::default().scope(SCOPE_NORMAL), |ctx| {
                 ctx.literal(" WHERE ");
                 ctx.sql(&where_)
@@ -296,6 +297,14 @@ pub fn insert<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
         let mut stmt = None;
         if has_conflict {
             let conflict_statement = ctx.dialect.conflict_statement.clone();
+            if conflict_statement.is_none() {
+                // OnConflict.get_conflict_statement (peewee 4).
+                let err = py
+                    .import("peewee")?
+                    .getattr("InterfaceError")?
+                    .call1(("ON CONFLICT clause requires the query be bound to a database.",))?;
+                return Err(PyErr::from_value(err));
+            }
             let s = conflict_hook(ctx, &conflict_statement, &on_conflict, node)?;
             if s.is_truthy()? {
                 stmt = Some(s);
@@ -339,8 +348,7 @@ pub fn insert<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
             let conflict_update = ctx.dialect.conflict_update.clone();
             let upd = conflict_hook(ctx, &conflict_update, &on_conflict, node)?;
             if !upd.is_none() {
-                // peewee 4 renders the update with `subquery=True`, so a
-                // sub-select in a SET value keeps its parentheses.
+                // peewee 4: the conflict update renders with subquery=True.
                 ctx.with(Over::default().subquery(true), |ctx| {
                     ctx.literal(" ");
                     ctx.sql(&upd)
@@ -358,10 +366,17 @@ fn simple_insert<'py>(
     insert_data: &Bound<'py, PyAny>,
     columns: &Bound<'py, PyAny>,
 ) -> PyResult<()> {
-    if !insert_data.is_truthy()? {
+    let py = ctx.py;
+    // peewee 4.2.2: an empty insert still lists the model's python-side
+    // defaults (`get_default_data()`) instead of falling back to
+    // DEFAULT VALUES.
+    if !insert_data.is_truthy()?
+        && !node
+            .call_method0(intern!(py, "get_default_data"))?
+            .is_truthy()?
+    {
         return Err(default_values_exception(ctx, "Error: no data to insert.")?);
     }
-    let py = ctx.py;
     let rows = PyTuple::new(py, [insert_data])?.into_any().try_iter()?;
     generate_insert(ctx, node, rows, columns)
 }
@@ -372,8 +387,12 @@ fn query_insert<'py>(
     insert_data: &Bound<'py, PyAny>,
     columns: &Bound<'py, PyAny>,
 ) -> PyResult<()> {
-    basic::enclosed_list(ctx, columns)?;
-    ctx.literal(" ");
+    // peewee 4.2.3: without explicit columns (`Table.insert(select_query)`)
+    // there is no column list at all, not an empty `() `.
+    if columns.is_truthy()? {
+        basic::enclosed_list(ctx, columns)?;
+        ctx.literal(" ");
+    }
     ctx.sql(insert_data)
 }
 

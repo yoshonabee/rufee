@@ -159,20 +159,17 @@ pub fn select<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult<()>
         }
         apply_ordering(ctx, node)?;
 
+        // peewee 4.0.3+: `_for_update` holds a ready-made `ForUpdate` node
+        // (or None); the `of` / `nowait` / `skip_locked` parts live on it.
         let for_update = node.getattr(intern!(py, "_for_update"))?;
-        if for_update.is_truthy()? {
+        if !for_update.is_none() {
             if !ctx.dialect.for_update {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "FOR UPDATE specified but not supported by database.",
                 ));
             }
             ctx.literal(" ");
-            let fu = ctx.c.for_update.bind(ctx.py).call1((
-                &for_update,
-                node.getattr(intern!(py, "_for_update_of"))?,
-                node.getattr(intern!(py, "_for_update_nowait"))?,
-            ))?;
-            ctx.sql(&fu)?;
+            ctx.sql(&for_update)?;
         }
         Ok(())
     })?;
@@ -434,6 +431,8 @@ pub fn for_update<'py>(ctx: &mut Ctx<'py>, node: &Bound<'py, PyAny>) -> PyResult
     }
     if node.getattr(intern!(py, "_nowait"))?.is_truthy()? {
         ctx.literal(" NOWAIT");
+    } else if node.getattr(intern!(py, "_skip_locked"))?.is_truthy()? {
+        ctx.literal(" SKIP LOCKED");
     }
     Ok(())
 }

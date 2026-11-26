@@ -11,20 +11,8 @@ non-strict xfails and are removed once every gap is fixed.
 """
 
 # Gap categories. Keep these in sync with the README TODO.
-OPERATORS = "MySQL CONCAT() instead of || (peewee 4.5)"
-FOR_UPDATE = "FOR UPDATE was reworked (no _for_update_of etc.)"
-
-KNOWN_GAPS = {
-    "test_differential.py::test_representative_queries[concat-mysql]": OPERATORS,
-    "test_options.py::test_concat_mysql_is_a_function": OPERATORS,
-    "test_options.py::test_operations_mapping[CONCAT]": OPERATORS,
-    "test_options.py::test_for_update_mysql": FOR_UPDATE,
-    "test_options.py::test_for_update_option_alone_decides": FOR_UPDATE,
-    "test_options.py::test_for_update_variants[kwargs0-FOR SHARE]": FOR_UPDATE,
-    "test_options.py::test_for_update_variants[kwargs1-FOR UPDATE NOWAIT]": FOR_UPDATE,
-    "test_options.py::test_for_update_variants[kwargs2-FOR UPDATE NOWAIT]": FOR_UPDATE,
-    "test_options.py::test_for_update_variants[kwargs3-FOR UPDATE OF `t1`]": FOR_UPDATE,
-    "test_options.py::test_for_update_variants[kwargs4-FOR SHARE OF `t1` NOWAIT]": FOR_UPDATE,
+# All tracked gaps are fixed; add new ones here with a category constant.
+KNOWN_GAPS: dict[str, str] = {
 }
 
 FLAKY_GAPS = {

@@ -25,6 +25,8 @@ pub struct Dialect {
     pub nulls_ordering: bool,
     pub limit_max: Option<Py<PyAny>>,
     pub for_update: bool,
+    /// peewee 4.5: render `a || b` as `CONCAT(a, b)` (MySQL).
+    pub use_concat_function: bool,
     pub compound_select_parentheses: Option<i64>,
     pub conflict_statement: Option<Py<PyAny>>,
     pub conflict_update: Option<Py<PyAny>>,
@@ -97,6 +99,7 @@ impl Dialect {
             nulls_ordering: opt_bool(d, "nulls_ordering")?,
             limit_max: opt_obj(d, "limit_max")?,
             for_update: opt_bool(d, "for_update")?,
+            use_concat_function: opt_bool(d, "use_concat_function")?,
             compound_select_parentheses,
             conflict_statement: opt_obj(d, "conflict_statement")?,
             conflict_update: opt_obj(d, "conflict_update")?,

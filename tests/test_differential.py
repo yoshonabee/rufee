@@ -833,6 +833,10 @@ REPRESENTATIVE = {
     "insert_replace": User.insert(username="a").on_conflict_replace(),
     "insert_from_query": Note.insert_from(Tweet.select(Tweet.content, Tweet.likes), fields=[Note.body, Note.rank]),
     "insert_table": Items.insert({Items.name: "a", Items.qty: 1}),
+    # peewee 4.2.2: an empty insert lists the model's python-side defaults.
+    "insert_empty_defaults": User.insert(),
+    # peewee 4.2.3: inserting a query without columns renders no column list.
+    "insert_query_no_columns": Items.insert(Tweet.select(Tweet.id, Tweet.content, Tweet.likes)),
     "update_expression": Tweet.update(likes=Tweet.likes + 1).where(Tweet.id == 1),
     "update_subquery": Tweet.update({Tweet.likes: Note.select(Note.rank).where(Note.tweet == Tweet.id).limit(1)}),
     "update_table": Items.update({Items.qty: 0}).where(Items.name == "x"),

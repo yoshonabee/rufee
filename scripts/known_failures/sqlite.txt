@@ -6,13 +6,11 @@ tests.model_sql.TestModelCompoundSelect.test_limit  # fail: AssertionError: 'SEL
 tests.model_sql.TestModelCompoundSelect.test_union_same_model  # fail: AssertionError: 'SELE[68 chars]"alpha" AS "t2" UNION SELECT "t2"."alpha" FROM "alpha" AS "t2"' != 'SELE[68 chars]"alpha" AS "t2" UNION SELECT "t3"."alpha" FROM "alpha" A
 tests.model_sql.TestModelCompoundSelect.test_where  # fail: AssertionError: 'SELE[209 chars]SELECT "t2"."beta" FROM "beta" AS "t2" WHERE ("t2"."beta" > ?)' != 'SELE[209 chars]SELECT "t4"."beta" FROM "beta" AS "t4" WHERE ("t4"."beta" > ?)'
 tests.model_sql.TestModelSQL.test_default_select_as_source  # fail: AssertionError: 'SELE[26 chars]ELECT "t2"."id" FROM "users" AS "t2") AS "t1"' != 'SELE[26 chars]ELECT "t2"."id", "t2"."username" FROM "users" AS "t2") AS "t1"'
-tests.model_sql.TestModelSQL.test_insert_empty_applies_defaults  # fail: AssertionError: 'INSERT INTO "dflt" DEFAULT VALUES' != 'INSERT INTO "dflt" ("a", "b") VALUES (?, ?)'
 tests.model_sql.TestModelSQL.test_subquery_as_select_column  # fail: AssertionError: 'SELE[68 chars]ERE ("t2"."user_id" = "t1"."id")) AS "t3" FROM "users" AS "t1"' != 'SELE[68 chars]ERE ("t2"."user_id" = "t1"."id")) FROM "users" AS "t1"'
 tests.model_sql.TestModelSQL.test_update_subquery_in_function  # fail: AssertionError: 'UPDA[31 chars]ESCE("t1", ?)' != 'UPDA[31 chars]ESCE((SELECT MAX("t1"."id") FROM "t" AS "t1" W[33 chars], ?)'
 tests.models.TestCompoundExistsRegression.test_compound_regressions_1961  # error: OperationalError: near "(": syntax error
 tests.models.TestCompoundExistsRegression.test_exists_compound_predicate  # error: OperationalError: near "(": syntax error
 tests.models.TestDefaultSelectAsSource.test_source_subquery_executes  # error: OperationalError: no such column: t2.username
-tests.models.TestDefaultValues.test_empty_insert_lands_defaults  # error: IntegrityError: NOT NULL constraint failed: default_only.a
 tests.models.TestExistsIntegration.test_exists_compound_duplicate_columns  # error: OperationalError: near "(": syntax error
 tests.models.TestModelAPIs.test_compound_member_order_limit  # error: OperationalError: ORDER BY clause should come after UNION not before
 tests.models.TestModelAPIs.test_compound_select  # fail: AssertionError: 'SELE[172 chars]CT "t2"."id", "t2"."value" FROM "register" AS [36 chars]BY 2' != 'SELE[172 chars]CT "t3"."id", "t3"."value" FROM "register" AS [36 chars]BY 2'

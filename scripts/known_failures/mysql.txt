@@ -1,28 +1,19 @@
 tests.db_tests.TestUserDefinedCallbacks.test_collation_decorator  # error: OperationalError: near "COLLATE": syntax error
 tests.db_tests.TestUserDefinedCallbacks.test_custom_collation  # error: OperationalError: near "COLLATE": syntax error
-tests.hybrid.TestHybridProperties.test_hybrid_model_alias  # fail: AssertionError: Tuples differ: ('0',) != ('huey cat',)
-tests.hybrid.TestHybridProperties.test_hybrid_subclass_model_alias  # fail: AssertionError: Tuples differ: ('0',) != ('huey cat',)
-tests.hybrid.TestHybridProperties.test_string_fields  # error: PersonDoesNotExist: <Model: Person> instance matching query does not exist:
 tests.model_sql.TestModelAdvancedSQL.test_window_named  # fail: AssertionError: 'SELE[37 chars]OVER w, AVG("t1"."value") OVER w FROM "sample"[68 chars]ue")' != 'SELE[37 chars]OVER "w", AVG("t1"."value") OVER "w" FROM "sam[74 chars]ue")'
 tests.model_sql.TestModelCompoundSelect.test_correlated_subquery  # fail: AssertionError: 'SELE[157 chars]ma" FROM "gamma" AS "t3" WHERE ("t3"."gamma" = "t4"."alpha")))' != 'SELE[157 chars]ma" FROM "gamma" AS "t3" WHERE ("t3"."gamma" = "t1"
 tests.model_sql.TestModelCompoundSelect.test_limit  # fail: AssertionError: 'SELECT "t1"."alpha" FROM "alpha" AS "t1" ORDER B[100 chars]IT ?' != 'SELECT * FROM (SELECT "t1"."alpha" FROM "alpha" [132 chars]IT ?'
 tests.model_sql.TestModelCompoundSelect.test_union_same_model  # fail: AssertionError: 'SELE[68 chars]"alpha" AS "t2" UNION SELECT "t2"."alpha" FROM "alpha" AS "t2"' != 'SELE[68 chars]"alpha" AS "t2" UNION SELECT "t3"."alpha" FROM "alpha" A
 tests.model_sql.TestModelCompoundSelect.test_where  # fail: AssertionError: 'SELE[209 chars]SELECT "t2"."beta" FROM "beta" AS "t2" WHERE ("t2"."beta" > ?)' != 'SELE[209 chars]SELECT "t4"."beta" FROM "beta" AS "t4" WHERE ("t4"."beta" > ?)'
 tests.model_sql.TestModelSQL.test_default_select_as_source  # fail: AssertionError: 'SELE[26 chars]ELECT "t2"."id" FROM "users" AS "t2") AS "t1"' != 'SELE[26 chars]ELECT "t2"."id", "t2"."username" FROM "users" AS "t2") AS "t1"'
-tests.model_sql.TestModelSQL.test_insert_empty_applies_defaults  # fail: AssertionError: 'INSERT INTO "dflt" DEFAULT VALUES' != 'INSERT INTO "dflt" ("a", "b") VALUES (?, ?)'
 tests.model_sql.TestModelSQL.test_subquery_as_select_column  # fail: AssertionError: 'SELE[68 chars]ERE ("t2"."user_id" = "t1"."id")) AS "t3" FROM "users" AS "t1"' != 'SELE[68 chars]ERE ("t2"."user_id" = "t1"."id")) FROM "users" AS "t1"'
 tests.model_sql.TestModelSQL.test_update_subquery_in_function  # fail: AssertionError: 'UPDA[31 chars]ESCE("t1", ?)' != 'UPDA[31 chars]ESCE((SELECT MAX("t1"."id") FROM "t" AS "t1" W[33 chars], ?)'
-tests.models.TestCTEIntegration.test_recursive_cte  # error: OperationalError: (1292, "Truncated incorrect DOUBLE value: 'c31'")
-tests.models.TestCTEIntegration.test_recursive_cte_docs_example  # error: OperationalError: (1292, "Truncated incorrect DOUBLE value: 'root'")
 tests.models.TestCompoundExistsRegression.test_compound_regressions_1961  # error: ProgrammingError: (1064, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use ne
 tests.models.TestDefaultSelectAsSource.test_source_subquery_executes  # error: OperationalError: (1054, "Unknown column 't2.username' in 'field list'")
-tests.models.TestDefaultValues.test_empty_insert_lands_defaults  # error: IntegrityError: NOT NULL constraint failed: default_only.a
 tests.models.TestExistsIntegration.test_exists_compound_duplicate_columns  # error: ProgrammingError: (1064, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use n
-tests.models.TestLikeColumnValue.test_like_column_value  # fail: AssertionError: Lists differ: [] != [('u1', 'i am u1'), ('u1', 'u1 is my name'), ('u3', 'hey u3 is me')]
 tests.models.TestModelAPIs.test_compound_member_order_limit  # error: ProgrammingError: (1064, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'UNION SEL
 tests.models.TestModelAPIs.test_compound_select  # fail: AssertionError: 'SELE[172 chars]CT "t2"."id", "t2"."value" FROM "register" AS [36 chars]BY 2' != 'SELE[172 chars]CT "t3"."id", "t3"."value" FROM "register" AS [36 chars]BY 2'
 tests.models.TestModelAPIs.test_correlated_compound_subquery  # fail: AssertionError: 'SELE[201 chars] WHERE ("t3"."user_id" = "t4"."id"))) ORDER BY "t1"."username"' != 'SELE[201 chars] WHERE ("t3"."user_id" = "t1"."id"))) ORDER BY "t1"."us
-tests.models.TestModelAPIs.test_insert_rowcount  # error: OperationalError: (1292, "Truncated incorrect DOUBLE value: 'u1'")
 tests.models.TestModelAPIs.test_nested_compound_grouping  # fail: AssertionError: Lists differ: ['u1', 'u2', 'u3', 'u4', 'u5', 'u7'] != ['u2', 'u3', 'u7']
 tests.models.TestOuterJoinPopulateNone.test_join_custom_attr  # error: OperationalError: (1054, "Unknown column 't2.name' in 'field list'")
 tests.models.TestOuterJoinPopulateNone.test_join_fk  # error: OperationalError: (1054, "Unknown column 't2.name' in 'field list'")

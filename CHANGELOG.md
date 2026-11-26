@@ -20,6 +20,9 @@ Observability for shadow-mode rollouts. Rendering is unchanged.
 - New [`docs/migration-guide.md`](docs/migration-guide.md): shadow → rust
   rollout, what rufee logs and counts, exporting the counters, mismatch triage,
   rollback.
+- Python 3.14 is tested in CI and listed in the classifiers (the `abi3-py311`
+  wheels already loaded on it).
+- README badges; line coverage (Rust and Python) is measured in CI.
 
 ## 0.2.0
 

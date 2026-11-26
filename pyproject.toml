@@ -26,6 +26,11 @@ dev = [
   "pytest>=8", "hypothesis>=6", "pymysql>=1.1", "maturin>=1.15,<2.0",
   # playhouse.pwasyncio and its tests (tests/test_asyncio.py, peewee's tests.pwasyncio)
   "greenlet>=3", "aiosqlite>=0.20", "aiomysql>=0.2",
+  # postgres lanes (psycopg2 / psycopg 3) and peewee's tests.postgres; the
+  # postgres_ext SQL-only tests also run on the sqlite lane once importable
+  "psycopg2-binary>=2.9", "psycopg[binary]>=3.2",
+  # playhouse.apsw_ext and peewee's tests.apsw_ext
+  "apsw>=3.45",
 ]
 
 [project.urls]

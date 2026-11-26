@@ -521,6 +521,17 @@ impl<'py> Ctx<'py> {
     where
         F: FnOnce(&Bound<'py, PyAny>) -> PyResult<()>,
     {
+        let pctx = self.python_ctx()?;
+        f(&pctx)?;
+        let (sql, params): (String, Vec<Py<PyAny>>) = pctx.call_method0("query")?.extract()?;
+        self.sql.push_str(&sql);
+        self.values.extend(params);
+        Ok(())
+    }
+
+    /// A throw-away peewee `Context` carrying our dialect settings and current
+    /// state, for Python hooks that take a `ctx` argument.
+    pub fn python_ctx(&self) -> PyResult<Bound<'py, PyAny>> {
         let py = self.py;
         // Rebuild the settings dict peewee would hold at this point: dialect
         // options plus the current per-scope flags.
@@ -542,11 +553,7 @@ impl<'py> Ctx<'py> {
         // peewee 4: State(scope, parentheses, settings), settings as a dict.
         let st = state_cls.call1((self.state.scope, self.state.parentheses, kwargs.copy()?))?;
         pctx.setattr("state", st)?;
-        f(&pctx)?;
-        let (sql, params): (String, Vec<Py<PyAny>>) = pctx.call_method0("query")?.extract()?;
-        self.sql.push_str(&sql);
-        self.values.extend(params);
-        Ok(())
+        Ok(pctx)
     }
 
     pub fn unsupported(&self, what: &str) -> PyErr {

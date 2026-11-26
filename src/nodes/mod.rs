@@ -15,6 +15,7 @@ use crate::ctx::{Converter, Ctx};
 
 pub mod basic;
 pub mod function;
+pub mod json;
 pub mod query;
 pub mod source;
 pub mod write;
@@ -63,6 +64,11 @@ enum Kind {
     ForUpdate,
     Star,
     NamespaceAttribute,
+    JsonPath,
+    /// `playhouse.sqlite_ext.JSONPath` / `JSONBPath`, found through
+    /// `sys.modules` so the module is never imported by rufee itself.
+    SqliteJsonPath,
+    SqliteJsonbPath,
     /// `BitField.flag()`'s descriptor: a class defined inside a method, so it
     /// cannot be imported; recognised by name and shape.
     FlagDescriptor,
@@ -133,11 +139,19 @@ fn classify<'py>(ctx: &Ctx<'py>, obj: &Bound<'py, PyAny>) -> PyResult<Kind> {
             (&c.for_update, Kind::ForUpdate),
             (&c.star, Kind::Star),
             (&c.namespace_attribute, Kind::NamespaceAttribute),
+            (&c.json_path, Kind::JsonPath),
         ];
         for (cls, kind) in table {
             if isa(obj, cls)? {
                 return Ok(*kind);
             }
+        }
+        if let Some(jsonb) = json::sqlite_json_path_kind(obj)? {
+            return Ok(if jsonb {
+                Kind::SqliteJsonbPath
+            } else {
+                Kind::SqliteJsonPath
+            });
         }
         if obj.get_type().name()? == "FlagDescriptor"
             && obj.hasattr(intern!(obj.py(), "_field"))?
@@ -198,6 +212,9 @@ pub fn render<'py>(ctx: &mut Ctx<'py>, obj: &Bound<'py, PyAny>) -> PyResult<()> 
         Kind::ForUpdate => query::for_update(ctx, obj),
         Kind::Star => basic::star(ctx, obj),
         Kind::NamespaceAttribute => basic::namespace_attribute(ctx, obj),
+        Kind::JsonPath => json::json_path(ctx, obj),
+        Kind::SqliteJsonPath => json::sqlite_json_path(ctx, obj, false),
+        Kind::SqliteJsonbPath => json::sqlite_json_path(ctx, obj, true),
         Kind::FlagDescriptor => {
             // FlagDescriptor.__sql__: ctx.sql(self._field.bin_and(self._value) != 0)
             let field = obj.getattr(intern!(py, "_field"))?;

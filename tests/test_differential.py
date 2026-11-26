@@ -30,6 +30,8 @@ import peewee
 import pytest
 from hypothesis import HealthCheck, assume, event, given, settings, strategies as st
 from peewee import JOIN, SQL, Case, Table, Value, ValuesList, fn
+from playhouse import sqlite_ext
+from playhouse.mysql_ext import MySQLJSONField
 
 import rufee
 
@@ -873,6 +875,109 @@ def test_representative_queries(name, dialect):
         got = _render(rufee.Context, query, opts)
     except rufee.Unsupported as exc:
         pytest.skip(f"not implemented in Rust yet: {exc}")
+    assert rufee.stats.rust == 1
+    assert got[0] == expected[0]
+    assert _typed(got[1]) == _typed(expected[1])
+
+
+# --------------------------------------------------------------------------- #
+# JSON paths
+# --------------------------------------------------------------------------- #
+#
+# A JSON path renders through the helper its field got from the model's
+# database (`database.json_methods`), not through the context options, so each
+# dialect gets a model bound to a database of that dialect.
+
+JSON_DBS = {
+    "sqlite": peewee.SqliteDatabase(":memory:"),
+    "mysql": peewee.MySQLDatabase(None),
+}
+
+
+def _json_model(name, db, field_cls=peewee.JSONField):
+    class Meta:
+        database = db
+
+    return type(name, (peewee.Model,), {"data": field_cls(), "n": peewee.IntegerField(), "Meta": Meta, "__module__": __name__})
+
+
+JSON_MODELS = {
+    "sqlite": _json_model("SqliteDoc", JSON_DBS["sqlite"]),
+    "mysql": _json_model("MySQLDoc", JSON_DBS["mysql"], MySQLJSONField),
+}
+MARIADB_DOC = _json_model("MariaDoc", peewee.MySQLDatabase(None, mariadb=True))
+
+
+def _json_cases(M):
+    d = M.data
+    return {
+        "json_extract_key": M.select(d["k"]),
+        "json_extract_root": M.select(d.path()),
+        "json_path_indexes": M.select(d.path("a", 0, -1), d["a"][-3]),
+        "json_path_quoted_key": M.select(d['we"ird\\key']["x y"]),
+        "json_as_text": M.select(d["k"].as_text()).where(d["k"].as_text() == "v"),
+        "json_compare_value": M.select().where((d["k"] == {"a": [1, 2]}) | (d["n"] > 1.5) | (d["b"] != True)),  # noqa: E712
+        "json_is_null": M.select().where((d["k"] == None) | d["j"].is_null(False)),  # noqa: E711
+        "json_typed_cast": M.select(d["k"].as_int(), d["f"].as_float()),
+        "json_in_between": M.select().where(d["k"].in_([1, "a", None]) & d["n"].between(1, 5)),
+        "json_like": M.select().where(d["k"].like("%a%") | d["k"].startswith("b")),
+        "json_order_group": M.select(d["k"], fn.COUNT(M.id)).group_by(d["k"]).order_by(d["k"].desc()),
+        "json_mutators": M.update(
+            data=d["a"].set({"x": 1}),
+        ).where(M.id == 1),
+        "json_insert_replace": M.update({M.data: d["a"].insert([1, None])}),
+        "json_replace_append": M.update({M.data: d["a"].replace(None)}),
+        "json_append": M.update({M.data: d["arr"].append(True)}),
+        "json_remove": M.update({M.data: d["a"][0].remove()}),
+        "json_update_merge": M.update({M.data: d.update({"a": {"b": 2}})}),
+        "json_length": M.select(d["arr"].length(), d.length()),
+        "json_contains": M.select().where(d["a"].contains({"x": 1}) | d.contains([1])),
+        "json_has_keys": M.select().where(d["a"].has_key("x") & d.has_keys(["p", "q"]) & d.has_any_keys(["r"])),
+        "json_insert_row": M.insert(data={"a": [1, 2]}, n=d["k"].as_int()),
+    }
+
+
+JSON_REPRESENTATIVE = {
+    dialect: _json_cases(model) for dialect, model in JSON_MODELS.items()
+}
+JSON_REPRESENTATIVE["mysql"]["json_mysql_contains_any"] = JSON_MODELS["mysql"].select().where(
+    JSON_MODELS["mysql"].data["a"].contains_any([1, 2])
+)
+for _name, _query in _json_cases(MARIADB_DOC).items():
+    JSON_REPRESENTATIVE["mysql"][f"mariadb_{_name}"] = _query
+
+
+class SqliteExtDoc(peewee.Model):
+    data = sqlite_ext.JSONField()
+    bdata = sqlite_ext.JSONBField()
+
+    class Meta:
+        database = JSON_DBS["sqlite"]
+
+
+_sd, _sb = SqliteExtDoc.data, SqliteExtDoc.bdata
+# playhouse.sqlite_ext's own JSONPath / JSONBPath: fn.json_extract(field, '$...').
+JSON_REPRESENTATIVE["sqlite"].update({
+    "sqlite_ext_extract": SqliteExtDoc.select(_sd["a"][0], _sd["#"], _sd['q"k']).where(_sd["a"] == "x"),
+    "sqlite_ext_jsonb_extract": SqliteExtDoc.select(_sb["a"]["b"]).where(_sb["n"] > 1),
+    "sqlite_ext_root_path": SqliteExtDoc.select(sqlite_ext.JSONPath(_sd), sqlite_ext.JSONBPath(_sb)),
+    "sqlite_ext_update": SqliteExtDoc.update({SqliteExtDoc.data: _sd["a"].update({"b": 1})}),
+    "sqlite_ext_root_update": SqliteExtDoc.update({SqliteExtDoc.data: _sd.update({"b": 1}), SqliteExtDoc.bdata: _sb.update([1])}),
+    "sqlite_ext_jsonb_mutators": SqliteExtDoc.update({SqliteExtDoc.bdata: _sb["a"].set([1])}).where(_sb["x"].json_type() == "array"),
+})
+
+
+@pytest.mark.parametrize(
+    ("dialect", "name"),
+    [(dialect, name) for dialect in sorted(JSON_REPRESENTATIVE) for name in sorted(JSON_REPRESENTATIVE[dialect])],
+)
+def test_json_queries(dialect, name):
+    rufee.configure(fallback=False)
+    rufee.stats.reset()
+    query = JSON_REPRESENTATIVE[dialect][name]
+    opts = DIALECTS[dialect]
+    expected = _render(peewee.Context, query, opts)
+    got = _render(rufee.Context, query, opts)
     assert rufee.stats.rust == 1
     assert got[0] == expected[0]
     assert _typed(got[1]) == _typed(expected[1])

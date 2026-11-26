@@ -20,7 +20,7 @@ renders SQL.
 
 ### From a wheel
 
-CI builds wheels on every `v*` tag — job `wheels` in `.github/workflows/ci.yml`,
+CI builds wheels on every `v*` tag — job `wheels` in `.github/workflows/release.yml`,
 one artifact per platform (linux `x86_64`, linux `aarch64`, macOS `arm64`).
 Until they are attached to a [GitHub release](https://github.com/yoshonabee/rufee/releases)
 or published to PyPI, download them from that tag's workflow run:

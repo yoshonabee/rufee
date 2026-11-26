@@ -10,7 +10,7 @@ assignment to `Database.context_class`.
 | | |
 |---|---|
 | Python | CPython 3.11, 3.12 or 3.13. Wheels are built `abi3-py311`, so one wheel per platform covers all three. |
-| peewee | **3.17.x** (developed against 3.17.9). rufee reads peewee's private attributes; on any other version it turns itself off — see [Version gate](#version-gate). |
+| peewee | **4.5.x** (developed against 4.5.3). rufee reads peewee's private attributes; on any other version it turns itself off — see [Version gate](#version-gate). For peewee 3.17 use rufee 0.1.0. |
 | Platform | Linux `x86_64` / `aarch64`, macOS `arm64`. Anywhere else, build from source — you need a Rust stable toolchain. |
 
 rufee needs no database driver, no configuration file and no connection: it only
@@ -32,15 +32,15 @@ gh run download --repo yoshonabee/rufee --name wheels-ubuntu-latest-x86_64
 Then:
 
 ```sh
-pip install rufee-0.0.1-cp311-abi3-manylinux_2_17_x86_64.whl
+pip install rufee-0.2.0-cp311-abi3-manylinux_2_17_x86_64.whl
 ```
 
-rufee declares `peewee>=3.17.3,<3.18` as a dependency. If your project already
+rufee declares `peewee>=4.5.3,<4.6` as a dependency. If your project already
 pins peewee through a lockfile, install with `--no-deps` so the resolver does
 not touch it:
 
 ```sh
-pip install --no-deps rufee-0.0.1-cp311-abi3-manylinux_2_17_x86_64.whl
+pip install --no-deps rufee-0.2.0-cp311-abi3-manylinux_2_17_x86_64.whl
 ```
 
 ### From PyPI
@@ -129,6 +129,26 @@ Everything else keeps working unchanged: `Model.select()`, `.dicts()`,
 nested `__sql__` calls and bare expressions still go through peewee's own
 renderer — rufee only intercepts a fresh, top-level query render.
 
+### asyncio (`playhouse.pwasyncio`)
+
+The same assignment works for peewee's async databases:
+
+```python
+from playhouse.pwasyncio import AsyncMySQLDatabase
+
+
+class MyAsyncDatabase(AsyncMySQLDatabase):
+    context_class = rufee.Context
+```
+
+pwasyncio only makes the driver I/O asynchronous. `await db.aexecute(q)`,
+`db.list(q)`, `db.count(q)` and friends run the synchronous `query.execute()`
+inside a greenlet, and `db.iterate(q)` calls `query.sql()`; both build their
+SQL through `context_class`. Rendering is synchronous CPU work either way
+(rufee just finishes it sooner), and it keeps no shared per-query state, so
+concurrent tasks do not interfere. peewee's own asyncio test-suite passes
+through rufee on sqlite and MySQL.
+
 ## Configure
 
 Three environment variables, all read **once at import time**:
@@ -191,10 +211,10 @@ re-renders through peewee, so incomplete coverage is slow, never wrong.
 ## Version gate
 
 rufee reads peewee internals (`_from_list`, `_where`, `_returning`,
-`Join._on`, ...) and targets peewee 3.17.x. On any other version it logs
+`Join._on`, ...) and targets peewee 4.5.x. On any other version it logs
 
 ```
-rufee: peewee X.Y.Z is not supported (need 3.17.x); rufee.Context is a
+rufee: peewee X.Y.Z is not supported (need 4.5.x); rufee.Context is a
 pass-through. Set RUFEE_FORCE=1 to override.
 ```
 
@@ -216,9 +236,3 @@ query class and the reason; turn that on to see which.
 **pip: "not a supported wheel on this platform".** The wheel was built for a
 different platform tag — for `--compatibility linux` wheels, build and install
 on the same base image.
-
-**Segfault on `import` in a test environment on macOS.** Not rufee: peewee's
-PyPI wheel bundles a `playhouse/_sqlite_ext` C extension that crashes on
-connect on macOS. Install peewee without it
-(`NO_SQLITE=1 pip install --no-binary peewee peewee==3.17.9`) or delete the
-`_sqlite_ext*.so` / `_sqlite_udf*.so` files. Linux is unaffected.

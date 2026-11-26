@@ -12,8 +12,10 @@ untouched (`Model`, `Field`, `Expression`, `Select`, ...) and only replaces the
 renderer: a Rust walker reads the existing Python node tree and emits the SQL
 string and parameter list.
 
-Status: **renders peewee 3.17.9's entire test-suite byte-identically** (strict
-mode 100% on sqlite and MySQL, see below). Tagged `v0.1.0`, not on PyPI yet —
+Status: **renders peewee 4.5.3's entire test-suite byte-identically** (strict
+mode 100% on sqlite and MySQL, including peewee's asyncio tests, see below).
+peewee 3.x is no longer supported; use rufee `v0.1.0` for peewee 3.17. Not on
+PyPI yet —
 install from a wheel or from source, see
 [`docs/installation.md`](docs/installation.md). The API may still move.
 
@@ -22,7 +24,7 @@ install from a wheel or from source, see
 peewee already exposes the renderer as a class attribute:
 
 ```python
-# peewee 3.17.x
+# peewee 4.5.x
 class Database:
     context_class = Context
 
@@ -42,7 +44,10 @@ class MyDatabase(MySQLDatabase):
 ```
 
 Everything else (`Model.select()`, `.dicts()`, `insert_many`, `query.sql()`,
-`db.execute_sql(raw)`) keeps working unchanged.
+`db.execute_sql(raw)`) keeps working unchanged. The same line works for
+`playhouse.pwasyncio`'s async databases: async queries still render through the
+synchronous `context_class` path inside a greenlet, so rufee needs nothing
+async-specific.
 
 Full instructions — wheels, building from source, the Docker recipe, the
 `RUFEE_MODE` / `RUFEE_FALLBACK` / `RUFEE_FORCE` knobs, how to verify the install
@@ -70,22 +75,25 @@ and how to roll it out through shadow mode — are in
   2. *Shadow mode*: render both ways, log any mismatch (SQL string or params),
      and return peewee's result. Meant for staging before switching over.
   3. *Version gate*: rufee reads peewee's private attributes (`_from_list`,
-     `_where`, `_returning`, `Join._on`, ...). It targets peewee **3.17.x**;
+     `_where`, `_returning`, `Join._on`, ...). It targets peewee **4.5.x**;
      on any other version it degrades to a pure pass-through.
 
 Rendering time, `Context(**opts).sql(q).query()` including context
-construction, best of 5 × 5000 (Apple Silicon, CPython 3.11, peewee 3.17.9,
-MySQL dialect options):
+construction (Apple Silicon, CPython 3.11, peewee 4.5.3, MySQL dialect options):
 
 | query | peewee | rufee | ratio |
 |---|---|---|---|
-| join select (2 tables, IN + 2 predicates, ORDER BY, LIMIT/OFFSET) | 108 µs | 9.8 µs | 11.0x |
-| simple select (1 predicate, ORDER BY, LIMIT) | 64 µs | 7.0 µs | 9.1x |
-| `SELECT COUNT(...) WHERE` | 34 µs | 4.6 µs | 7.3x |
-| insert (7 columns) | 36 µs | 7.2 µs | 5.0x |
-| `insert_many`, 100 rows | 1246 µs | 195 µs | 6.4x |
-| update (expression + where) | 40 µs | 5.9 µs | 6.8x |
-| delete (IN) | 28 µs | 4.5 µs | 6.3x |
+| join select (2 tables, IN + 2 predicates, ORDER BY, LIMIT/OFFSET) | 77 µs | 9.3 µs | 8.2x |
+| simple select (1 predicate, ORDER BY, LIMIT) | 48 µs | 6.5 µs | 7.4x |
+| `SELECT COUNT(...) WHERE` | 25 µs | 4.3 µs | 5.8x |
+| insert (7 columns) | 31 µs | 6.3 µs | 5.0x |
+| `insert_many`, 100 rows | 1093 µs | 168 µs | 6.5x |
+| update (expression + where) | 29 µs | 5.0 µs | 5.8x |
+| delete (IN) | 15 µs | 3.8 µs | 3.9x |
+
+peewee 4's own renderer is about 30% faster than 3.17's (join select 108 →
+77 µs), so the ratios are lower than rufee 0.1's against peewee 3.17.9
+(6–11x); rufee's absolute times are unchanged or slightly better.
 
 Reproduce with `scripts/bench.py` (`--sqlite` for sqlite options, `--json`).
 
@@ -118,39 +126,39 @@ Two backends: sqlite in-memory (no infrastructure, `"` quoting, `?` params) and
 MySQL 8 in Docker (`` ` `` quoting, `%s` params, `ON DUPLICATE KEY UPDATE`).
 Postgres/CockroachDB/APSW/SQLCipher-specific tests are out of scope.
 
-Current result (`scripts/run_peewee_tests.py`, peewee 3.17.9, Python 3.11):
+Current result (`scripts/run_peewee_tests.py`, peewee 4.5.3, Python 3.11,
+including peewee's `tests.pwasyncio`):
 
 | lane | result | queries rendered by Rust |
 |---|---|---|
-| sqlite, strict | **860 / 860 pass** (100%), 105 skipped | 5,236, 0 fallbacks |
-| sqlite, safe | 860 / 860 pass | 5,236, 9 fallbacks* |
-| MySQL 8, strict | **813 / 813 pass** (100%), 148 skipped, 4 allow-listed | 5,028, 0 fallbacks |
-| MySQL 8, safe | 813 / 813 pass, 4 allow-listed | 5,028, 14 fallbacks* |
+| sqlite, strict | **1823 / 1823 pass** (100%), 385 skipped | 13,101, 0 fallbacks |
+| sqlite, safe | 1823 / 1823 pass | 13,101, 14 fallbacks* |
+| MySQL 8, strict | **1853 / 1853 pass** (100%), 355 skipped | 13,524, 0 fallbacks |
+| MySQL 8, safe | 1853 / 1853 pass | 13,524, 12 fallbacks* |
 
 \* safe-mode fallbacks are queries where the Rust renderer raised the same
 error peewee raises (`ValueError` from an on-conflict hook, `FOR UPDATE` on
 sqlite); the fallback re-renders with peewee, which raises it again.
 
-Baseline measured with **unmodified** peewee 3.17.9:
+The baseline (`--baseline`, rufee off) is clean with **unmodified** peewee
+4.5.3 on both backends, so the allow-list of pre-existing failures is empty.
 
-| backend | result | note |
-|---|---|---|
-| sqlite | 965 tests, OK, 105 skipped, 2.3 s | |
-| MySQL 8.x (pymysql) | 965 tests, 1 failure + 3 errors, 148 skipped, 98 s | pre-existing MySQL 8 incompatibilities in peewee's suite, reproduced without rufee: `test_for_update_nested` (1093 target table in FROM), `test_regexp_iregexp` (3995 utf8mb4_0900_ai_ci vs binary in `regexp_like`), `test_update_examples_2` (1064 syntax), `test_get_views` (view definition text normalisation). These are the harness allow-list; if one of them ever passes, rufee rendered something peewee would not. |
+Gaps are tracked as tests, not prose: `scripts/known_failures/<engine>.txt`
+lists peewee tests rufee is known to fail (empty today). Safe mode fails on any
+failure not listed *and* on any listed test that passes, so a fix must delete
+its entries. `tests/known_gaps.py` does the same for rufee's own tests as strict
+xfails. `scripts/run_peewee_tests.py` also keeps a short `FLAKY` set of
+timing-dependent upstream tests whose outcome is ignored.
 
 ```sh
 make venv dev peewee-src               # once
 make peewee-tests ARGS="-e sqlite --safe"
 make peewee-tests ARGS="-e sqlite --strict"
 make mysql-up && make peewee-tests ARGS="-e mysql --strict"
+make peewee-tests ARGS="-e sqlite --baseline"   # unmodified peewee
 ```
 
-Gotcha: on macOS the PyPI wheel's bundled `playhouse/_sqlite_ext` C extension
-segfaults on connect when `tests/sqlite.py` is collected. Install peewee without
-it (`NO_SQLITE=1 pip install --no-binary peewee peewee==3.17.9`) or delete the
-`_sqlite_ext*.so` / `_sqlite_udf*.so` files. Linux CI is unaffected.
-
-### rufee's own tests (`tests/`, 177 cases)
+### rufee's own tests (`tests/`, 295 cases)
 
 1. **Shim behaviour** (`test_shim.py`): fallback triggers (unsupported node,
    Rust error, Rust panic) never leak exceptions; shadow mode logs mismatches
@@ -166,7 +174,9 @@ it (`NO_SQLITE=1 pip install --no-binary peewee peewee==3.17.9`) or delete the
    `compound_select_parentheses`, each compared against peewee.
 4. **Benchmark regression** (`test_bench.py`): rufee must render at least 3x
    faster than peewee on a fixed join query.
-5. `cargo test` links against the venv's Python (`make cargo-test`); there is
+5. **asyncio** (`test_asyncio.py`): CRUD, `iterate()` and concurrent tasks
+   through `playhouse.pwasyncio` with `rufee.Context`, all rendered in Rust.
+6. `cargo test` links against the venv's Python (`make cargo-test`); there is
    no pure-Rust logic worth unit-testing yet.
 
 ## TODO
@@ -184,7 +194,7 @@ Ordered. Done items are kept for the record.
 2. ~~**Shim without a renderer.**~~ Done: `rufee.Context` with fallback, shadow
    mode, version gate.
 3. ~~**peewee test harness.**~~ Done: `scripts/run_peewee_tests.py`:
-   - fetch peewee source at tag `3.17.9` (git checkout in CI; not vendored);
+   - fetch peewee source at tag `PEEWEE_TAG` (git checkout in CI; not vendored);
    - apply both bindings from the table above;
    - `RUFEE_FALLBACK=0|1` selects strict / safe;
    - `-e sqlite` and `-e mysql` (MySQL via `docker compose`);
@@ -216,7 +226,11 @@ Ordered. Done items are kept for the record.
    byte-identical output. Going further means not reading the Python tree at
    all, which is the rejected "AST in Rust" design.
 10. **Release**: version, changelog, publish wheels from the `v*` tag workflow.
-11. **Shadow-mode field report**: run a real application in `RUFEE_MODE=shadow`
+    Version and changelog done for 0.2.0; publishing still to do.
+11. ~~**peewee 4.5.3**~~ Done (0.2.0): State / `_query_type` interface,
+    ordering and window quoting, compound selects, FOR UPDATE, MySQL `CONCAT()`,
+    sub-selects as operands and sources, JSON paths, asyncio coverage.
+12. **Shadow-mode field report**: run a real application in `RUFEE_MODE=shadow`
     and collect mismatches before recommending `rust` mode.
 
 ## Development setup
@@ -225,7 +239,7 @@ Requirements: Rust stable (`rustup update`), Python 3.11 (`uv python install 3.1
 `uv`, Docker (only for the MySQL lane).
 
 ```sh
-make venv        # .venv with dev deps; peewee installed without its C extensions
+make venv        # .venv with dev deps
 make dev         # maturin develop --release into .venv
 make test        # cargo test + pytest
 make lint        # cargo fmt --check + clippy

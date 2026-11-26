@@ -35,7 +35,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: uv venv --clear .venv
-      - run: NO_SQLITE=1 uv pip install -p .venv/bin/python --no-binary peewee -e ".[dev]"
+      - run: uv pip install -p .venv/bin/python -e ".[dev]"
       - run: VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
       - run: .venv/bin/python -m pytest -q
 
@@ -61,7 +61,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: uv venv --clear .venv
-      - run: NO_SQLITE=1 uv pip install -p .venv/bin/python --no-binary peewee -e ".[dev]"
+      - run: uv pip install -p .venv/bin/python -e ".[dev]"
       - run: VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
       - run: make peewee-src
       - name: sqlite safe (must pass)

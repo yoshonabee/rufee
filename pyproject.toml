@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "rufee"
-version = "0.0.1"
+version = "0.2.0"
 description = "peewee's SQL rendering Context, implemented in Rust"
 readme = "README.md"
 license = { file = "LICENSE" }

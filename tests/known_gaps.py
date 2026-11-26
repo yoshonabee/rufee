@@ -12,17 +12,13 @@ non-strict xfails and are removed once every gap is fixed.
 
 # Gap categories. Keep these in sync with the README TODO.
 OPERATORS = "MySQL CONCAT() instead of || (peewee 4.5)"
-ORDERING = "Ordering.collate() renders COLLATE before the direction"
 FOR_UPDATE = "FOR UPDATE was reworked (no _for_update_of etc.)"
 COMPOUND = "compound select parentheses / alias scoping changed"
-VALUE_LITERALS = "value_literals escapes single quotes"
 
 KNOWN_GAPS = {
     "test_differential.py::test_representative_queries[concat-mysql]": OPERATORS,
     "test_options.py::test_concat_mysql_is_a_function": OPERATORS,
     "test_options.py::test_operations_mapping[CONCAT]": OPERATORS,
-    "test_differential.py::test_representative_queries[ordering-sqlite]": ORDERING,
-    "test_differential.py::test_representative_queries[ordering-mysql]": ORDERING,
     "test_options.py::test_for_update_mysql": FOR_UPDATE,
     "test_options.py::test_for_update_option_alone_decides": FOR_UPDATE,
     "test_options.py::test_for_update_variants[kwargs0-FOR SHARE]": FOR_UPDATE,
@@ -33,7 +29,6 @@ KNOWN_GAPS = {
     "test_differential.py::test_representative_queries[union_all_intersect-sqlite]": COMPOUND,
     "test_options.py::test_compound_select_parentheses_modes[sqlite-0]": COMPOUND,
     "test_options.py::test_compound_select_parentheses_modes[mysql-0]": COMPOUND,
-    "test_options.py::test_value_literals_types": VALUE_LITERALS,
 }
 
 FLAKY_GAPS = {

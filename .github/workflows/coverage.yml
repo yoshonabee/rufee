@@ -1,0 +1,94 @@
+name: Coverage
+
+# Line coverage of the Rust renderer and the Python shim, measured by running
+# rufee's own tests and peewee's suite (sqlite, strict) against an
+# instrumented build. On main, the result is published as a shields.io
+# endpoint file on the `badges` branch, which the README badge reads.
+#
+# Kept out of ci.yml on purpose: release.yml reuses ci.yml, and this job needs
+# `contents: write` on main to update the badge.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          cache-dependency-glob: pyproject.toml
+          python-version: "3.11"
+      - run: uv venv --clear .venv
+      - run: uv pip install -p .venv/bin/python -e ".[dev]" coverage
+      - run: make peewee-src
+
+      - name: instrumented build + tests
+        # The PyO3 recipe: build the extension with cargo-llvm-cov's
+        # environment, run the Python tests against it, then report. A debug
+        # build, so the benchmark test (marked slow) is skipped.
+        run: |
+          source <(cargo llvm-cov show-env --export-prefix)
+          export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+          cargo llvm-cov clean --workspace
+          VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop
+          .venv/bin/python -m coverage run --source=python/rufee -m pytest -q -m "not slow"
+          .venv/bin/python -m coverage run --append --source=python/rufee \
+            scripts/run_peewee_tests.py -e sqlite --strict
+          cargo llvm-cov report --json --summary-only --output-path rust-coverage.json
+          .venv/bin/python -m coverage json -o python-coverage.json
+
+      - name: summarise
+        run: |
+          python3 - <<'PY'
+          import json, os
+
+          rust = json.load(open("rust-coverage.json"))["data"][0]["totals"]["lines"]
+          py = json.load(open("python-coverage.json"))["totals"]
+          parts = {
+              "Rust": (rust["covered"], rust["count"]),
+              "Python": (py["covered_lines"], py["num_statements"]),
+          }
+          covered = sum(c for c, _ in parts.values())
+          total = sum(t for _, t in parts.values())
+          percent = 100 * covered / total
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              print("| part | covered lines | total | coverage |", file=out)
+              print("|---|---|---|---|", file=out)
+              for name, (c, t) in {**parts, "total": (covered, total)}.items():
+                  print(f"| {name} | {c} | {t} | {100 * c / t:.1f}% |", file=out)
+
+          color = ("brightgreen" if percent >= 90 else "green" if percent >= 80
+                   else "yellow" if percent >= 70 else "orange" if percent >= 60 else "red")
+          json.dump({"schemaVersion": 1, "label": "coverage",
+                     "message": f"{percent:.0f}%", "color": color},
+                    open("coverage-badge.json", "w"))
+          print(open("coverage-badge.json").read())
+          PY
+
+      - name: publish badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir badges && cp coverage-badge.json badges/coverage.json
+          cd badges
+          git init -q -b badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add coverage.json
+          git commit -q -m "coverage badge for ${GITHUB_SHA::7}"
+          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" badges

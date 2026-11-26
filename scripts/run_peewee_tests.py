@@ -47,6 +47,14 @@ ALLOWLIST: dict[str, set[str]] = {
     "mysql": set(),
 }
 
+# Timing-dependent upstream tests that pass or fail regardless of the renderer.
+# Their outcome is ignored either way. Keep this list short and justified.
+FLAKY = {
+    # Raw SQL through sqliteq's writer thread with a 1 ms result timeout racing
+    # a 10 ms sleep; no rendering involved.
+    "tests.sqliteq.TestThreadedDatabaseThreads.test_timeout",
+}
+
 # Known rufee rendering gaps, one file per engine: ``<test id>  # <reason>``.
 # They are reported but do not fail the run; one that starts passing does,
 # until it is removed (``--update-known-failures`` rewrites the file).
@@ -69,7 +77,7 @@ def write_known_failures(engine: str, outcomes) -> Path:
     path.parent.mkdir(exist_ok=True)
     lines = [f"{test_id}  # {kind}: {msg}"[:240]
              for test_id, (kind, msg) in sorted(outcomes.items())
-             if kind in ("fail", "error", "unsupported")]
+             if kind in ("fail", "error", "unsupported") and test_id not in FLAKY]
     path.write_text("".join(f"{line}\n" for line in lines))
     return path
 
@@ -227,6 +235,8 @@ def summarize(outcomes, allowlist, known=None):
     allowlisted_but_passing = []
     known_but_passing = []
     for test_id, (kind, msg) in sorted(outcomes.items()):
+        if test_id in FLAKY:
+            continue
         if test_id in allowlist:
             if kind == "pass":
                 allowlisted_but_passing.append(test_id)

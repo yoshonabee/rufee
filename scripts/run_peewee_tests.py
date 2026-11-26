@@ -22,7 +22,8 @@ Modes (``RUFEE_FALLBACK`` or ``--strict`` / ``--safe``):
 
 Usage::
 
-    scripts/run_peewee_tests.py [-e sqlite|mysql] [--strict|--safe] [--json out]
+    scripts/run_peewee_tests.py [-e sqlite|mysql|postgres|psycopg3] [--strict|--safe]
+                                [--json out]
                                 [--peewee-src DIR] [tests.module ...]
 """
 
@@ -40,11 +41,13 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 
 # Tests that fail with unmodified peewee on that backend (``--baseline``), i.e.
-# not rufee's doing. Empty for peewee 4.5.3 on sqlite and MySQL 8. A listed
+# not rufee's doing. Empty for peewee 4.5.3 on sqlite, MySQL 8 and Postgres 17. A listed
 # test that passes under rufee means rufee rendered something peewee would not.
 ALLOWLIST: dict[str, set[str]] = {
     "sqlite": set(),
     "mysql": set(),
+    "postgres": set(),
+    "psycopg3": set(),
 }
 
 # Timing-dependent upstream tests that pass or fail regardless of the renderer.
@@ -83,11 +86,15 @@ def write_known_failures(engine: str, outcomes) -> Path:
 
 
 MYSQL_DEFAULTS = {"host": "127.0.0.1", "port": "33306", "user": "root", "password": "peewee"}
+PSQL_DEFAULTS = {"host": "127.0.0.1", "port": "35432", "user": "postgres", "password": "peewee"}
+# peewee's test-suite names postgres through either driver: psycopg2
+# ("postgres") or psycopg 3 ("psycopg3").
+POSTGRES_ENGINES = ("postgres", "psycopg3")
 
 
 def parse_args(argv):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("-e", "--engine", default="sqlite", choices=["sqlite", "mysql"])
+    p.add_argument("-e", "--engine", default="sqlite", choices=["sqlite", "mysql", *POSTGRES_ENGINES])
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--strict", action="store_true", help="fallback off (default from RUFEE_FALLBACK)")
     mode.add_argument("--safe", action="store_true", help="fallback on")
@@ -104,6 +111,8 @@ def parse_args(argv):
                    help="in strict mode, exit 1 when non-Unsupported failures occur (safe mode always does)")
     for k, v in MYSQL_DEFAULTS.items():
         p.add_argument(f"--mysql-{k}", default=os.environ.get(f"PEEWEE_MYSQL_{k.upper()}", v))
+    for k, v in PSQL_DEFAULTS.items():
+        p.add_argument(f"--psql-{k}", default=os.environ.get(f"PEEWEE_PSQL_{k.upper()}", v))
     p.add_argument("modules", nargs="*", help="e.g. sql model_sql (default: whole suite)")
     return p.parse_args(argv)
 
@@ -215,6 +224,23 @@ def configure_backend(args) -> None:
     if args.engine == "mysql":
         for k in MYSQL_DEFAULTS:
             os.environ[f"PEEWEE_MYSQL_{k.upper()}"] = str(getattr(args, f"mysql_{k}"))
+    if args.engine in POSTGRES_ENGINES:
+        for k in PSQL_DEFAULTS:
+            os.environ[f"PEEWEE_PSQL_{k.upper()}"] = str(getattr(args, f"psql_{k}"))
+        ensure_hstore(args)
+
+
+def ensure_hstore(args) -> None:
+    """peewee's hstore tests expect the extension in ``peewee_test``; a stock
+    postgres image does not have it enabled."""
+    import peewee
+
+    db = peewee.PostgresqlDatabase(
+        "peewee_test", host=args.psql_host, port=int(args.psql_port),
+        user=args.psql_user, password=args.psql_password,
+        prefer_psycopg3=args.engine == "psycopg3")
+    with db:
+        db.execute_sql("CREATE EXTENSION IF NOT EXISTS hstore")
 
 
 def collect(modules):

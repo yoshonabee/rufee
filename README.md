@@ -5,6 +5,7 @@
 [![peewee](https://img.shields.io/badge/peewee-4.5.x-blue)](https://github.com/coleifer/peewee)
 [![SQLite](https://img.shields.io/badge/SQLite-tested-003B57?logo=sqlite&logoColor=white)](#peewees-own-test-suite-as-the-spec)
 [![MySQL](https://img.shields.io/badge/MySQL%208-tested-4479A1?logo=mysql&logoColor=white)](#peewees-own-test-suite-as-the-spec)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL%2017-tested-4169E1?logo=postgresql&logoColor=white)](#peewees-own-test-suite-as-the-spec)
 [![CI](https://img.shields.io/github/actions/workflow/status/yoshonabee/rufee/ci.yml?branch=main&label=build)](https://github.com/yoshonabee/rufee/actions/workflows/ci.yml?query=branch%3Amain)
 [![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fyoshonabee%2Frufee%2Fbadges%2Fcoverage.json)](https://github.com/yoshonabee/rufee/actions/workflows/coverage.yml?query=branch%3Amain)
 [![License](https://img.shields.io/pypi/l/rufee)](LICENSE)
@@ -22,7 +23,8 @@ renderer: a Rust walker reads the existing Python node tree and emits the SQL
 string and parameter list.
 
 Status: **renders peewee 4.5.3's entire test-suite byte-identically** (strict
-mode 100% on sqlite and MySQL, including peewee's asyncio tests, see below).
+mode 100% on sqlite, MySQL and Postgres, including peewee's asyncio,
+`postgres_ext` and APSW tests, see below).
 peewee 3.x is no longer supported; use rufee `v0.1.0` for peewee 3.17.
 Install with `pip install rufee`; other options are in
 [`docs/installation.md`](docs/installation.md). The API may still move.
@@ -133,26 +135,39 @@ Two modes, run separately:
 | strict | off: unsupported node fails the test | pass rate = coverage progress | reported on every PR |
 | safe | on | proves "incomplete coverage is never wrong" | always 100% green |
 
-Two backends: sqlite in-memory (no infrastructure, `"` quoting, `?` params) and
-MySQL 8 in Docker (`` ` `` quoting, `%s` params, `ON DUPLICATE KEY UPDATE`).
-Postgres/CockroachDB/APSW/SQLCipher-specific tests are out of scope.
+Three backends, four lanes:
+
+- sqlite in-memory (no infrastructure, `"` quoting, `?` params); with `apsw`
+  installed this lane also runs peewee's `tests.apsw_ext`;
+- MySQL 8 in Docker (`` ` `` quoting, `%s` params, `ON DUPLICATE KEY UPDATE`);
+- Postgres 17 in Docker (`"` quoting, `%s` params, `ON CONFLICT`,
+  `RETURNING`), once through psycopg2 (`-e postgres`) and once through
+  psycopg 3 (`-e psycopg3`). These lanes include peewee's `tests.postgres`
+  (`playhouse.postgres_ext`: JSON/JSONB lookups and paths, arrays, hstore);
+  the runner enables the `hstore` extension in `peewee_test` itself.
+
+CockroachDB/SQLCipher-specific tests are out of scope.
 
 Current result (`scripts/run_peewee_tests.py`, peewee 4.5.3, Python 3.11,
 including peewee's `tests.pwasyncio`):
 
 | lane | result | queries rendered by Rust |
 |---|---|---|
-| sqlite, strict | **1823 / 1823 pass** (100%), 385 skipped | 13,101, 0 fallbacks |
-| sqlite, safe | 1823 / 1823 pass | 13,101, 14 fallbacks* |
-| MySQL 8, strict | **1853 / 1853 pass** (100%), 355 skipped | 13,524, 0 fallbacks |
-| MySQL 8, safe | 1853 / 1853 pass | 13,524, 12 fallbacks* |
+| sqlite, strict | **1835 / 1835 pass** (100%), 385 skipped | 13,157, 0 fallbacks |
+| sqlite, safe | 1835 / 1835 pass | 13,157, 14 fallbacks* |
+| MySQL 8, strict | **1865 / 1865 pass** (100%), 355 skipped | 13,580, 0 fallbacks |
+| MySQL 8, safe | 1865 / 1865 pass | 13,580, 12 fallbacks* |
+| Postgres 17 (psycopg2), strict | **1951 / 1951 pass** (100%), 353 skipped | 14,430, 0 fallbacks |
+| Postgres 17 (psycopg2), safe | 1951 / 1951 pass | 14,430, 12 fallbacks* |
+| Postgres 17 (psycopg 3), strict | **1949 / 1949 pass** (100%), 355 skipped | 14,404, 0 fallbacks |
+| Postgres 17 (psycopg 3), safe | 1949 / 1949 pass | 14,404, 12 fallbacks* |
 
 \* safe-mode fallbacks are queries where the Rust renderer raised the same
 error peewee raises (`ValueError` from an on-conflict hook, `FOR UPDATE` on
 sqlite); the fallback re-renders with peewee, which raises it again.
 
 The baseline (`--baseline`, rufee off) is clean with **unmodified** peewee
-4.5.3 on both backends, so the allow-list of pre-existing failures is empty.
+4.5.3 on every lane, so the allow-list of pre-existing failures is empty.
 
 Gaps are tracked as tests, not prose: `scripts/known_failures/<engine>.txt`
 lists peewee tests rufee is known to fail (empty today). Safe mode fails on any
@@ -166,6 +181,8 @@ make venv dev peewee-src               # once
 make peewee-tests ARGS="-e sqlite --safe"
 make peewee-tests ARGS="-e sqlite --strict"
 make mysql-up && make peewee-tests ARGS="-e mysql --strict"
+make postgres-up && make peewee-tests ARGS="-e postgres --strict"   # or -e psycopg3
+make db-down                           # stop the database containers
 make peewee-tests ARGS="-e sqlite --baseline"   # unmodified peewee
 ```
 
@@ -179,8 +196,10 @@ make peewee-tests ARGS="-e sqlite --baseline"   # unmodified peewee
 2. **Differential testing** (`test_differential.py`, hypothesis): random query
    trees from a small grammar (selects, joins, subqueries, compound selects,
    inserts, updates, deletes, functions, windows, CASE) rendered with both
-   sqlite and MySQL options must give identical SQL *and* params. Plus 50
-   hand-written representative queries × 2 dialects.
+   sqlite, MySQL and Postgres options must give identical SQL *and* params.
+   Plus 67 hand-written representative queries × 3 dialects, JSON paths per
+   dialect, and 21 `playhouse.postgres_ext` queries (JSON lookups and paths,
+   array values, indexes and slices).
 3. **Context options** (`test_options.py`): `quote`, `param`, `operations`,
    `nulls_ordering`, `limit_max`, `value_literals`, `for_update`,
    `compound_select_parentheses`, each compared against peewee.
@@ -244,13 +263,16 @@ Ordered. Done items are kept for the record.
 11. ~~**peewee 4.5.3**~~ Done (0.2.0): State / `_query_type` interface,
     ordering and window quoting, compound selects, FOR UPDATE, MySQL `CONCAT()`,
     sub-selects as operands and sources, JSON paths, asyncio coverage.
-12. **Shadow-mode field report**: run a real application in `RUFEE_MODE=shadow`
+12. ~~**Postgres**~~ Done: psycopg2 and psycopg 3 lanes in CI, and the
+    `playhouse.postgres_ext` nodes (`JsonLookup`, `JsonPath`, `ObjectSlice`,
+    `ArrayValue`) render in Rust.
+13. **Shadow-mode field report**: run a real application in `RUFEE_MODE=shadow`
     and collect mismatches before recommending `rust` mode.
 
 ## Development setup
 
 Requirements: Rust stable (`rustup update`), Python 3.11 (`uv python install 3.11`),
-`uv`, Docker (only for the MySQL lane).
+`uv`, Docker (only for the MySQL and Postgres lanes).
 
 ```sh
 make venv        # .venv with dev deps

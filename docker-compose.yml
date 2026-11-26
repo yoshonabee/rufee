@@ -1,4 +1,4 @@
-# MySQL for the peewee test-suite lane (scripts/run_peewee_tests.py -e mysql).
+# Databases for the peewee test-suite lanes (scripts/run_peewee_tests.py -e mysql|postgres).
 services:
   mysql:
     image: mysql:8
@@ -13,6 +13,22 @@ services:
     command: ["--innodb-flush-log-at-trx-commit=0", "--sync-binlog=0", "--skip-log-bin"]
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-uroot", "-ppeewee", "--silent"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: peewee
+      POSTGRES_DB: peewee_test
+    ports:
+      - "35432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    command: ["-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "peewee_test"]
       interval: 2s
       timeout: 2s
       retries: 30

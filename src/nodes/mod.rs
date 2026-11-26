@@ -16,6 +16,7 @@ use crate::ctx::{Converter, Ctx};
 pub mod basic;
 pub mod function;
 pub mod json;
+pub mod postgres;
 pub mod query;
 pub mod source;
 pub mod write;
@@ -69,6 +70,8 @@ enum Kind {
     /// `sys.modules` so the module is never imported by rufee itself.
     SqliteJsonPath,
     SqliteJsonbPath,
+    /// `playhouse.postgres_ext` nodes, found through `sys.modules` likewise.
+    Postgres(postgres::PgKind),
     /// `BitField.flag()`'s descriptor: a class defined inside a method, so it
     /// cannot be imported; recognised by name and shape.
     FlagDescriptor,
@@ -153,6 +156,9 @@ fn classify<'py>(ctx: &Ctx<'py>, obj: &Bound<'py, PyAny>) -> PyResult<Kind> {
                 Kind::SqliteJsonPath
             });
         }
+        if let Some(pg) = postgres::kind(obj)? {
+            return Ok(Kind::Postgres(pg));
+        }
         if obj.get_type().name()? == "FlagDescriptor"
             && obj.hasattr(intern!(obj.py(), "_field"))?
             && obj.hasattr(intern!(obj.py(), "_value"))?
@@ -215,6 +221,7 @@ pub fn render<'py>(ctx: &mut Ctx<'py>, obj: &Bound<'py, PyAny>) -> PyResult<()> 
         Kind::JsonPath => json::json_path(ctx, obj),
         Kind::SqliteJsonPath => json::sqlite_json_path(ctx, obj, false),
         Kind::SqliteJsonbPath => json::sqlite_json_path(ctx, obj, true),
+        Kind::Postgres(pg) => postgres::render(ctx, obj, pg),
         Kind::FlagDescriptor => {
             // FlagDescriptor.__sql__: ctx.sql(self._field.bin_and(self._value) != 0)
             let field = obj.getattr(intern!(py, "_field"))?;

@@ -54,6 +54,15 @@ jobs:
         options: >-
           --health-cmd "mysqladmin ping -uroot -ppeewee --silent"
           --health-interval 2s --health-timeout 2s --health-retries 30
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: peewee
+          POSTGRES_DB: peewee_test
+        ports: ["35432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d peewee_test"
+          --health-interval 2s --health-timeout 2s --health-retries 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -70,17 +79,25 @@ jobs:
         run: .venv/bin/python scripts/run_peewee_tests.py -e sqlite --safe
       - name: mysql safe (must pass)
         run: .venv/bin/python scripts/run_peewee_tests.py -e mysql --safe
+      - name: postgres / psycopg2 safe (must pass)
+        run: .venv/bin/python scripts/run_peewee_tests.py -e postgres --safe
+      - name: postgres / psycopg3 safe (must pass)
+        run: .venv/bin/python scripts/run_peewee_tests.py -e psycopg3 --safe
       - name: sqlite strict (coverage report)
         run: .venv/bin/python scripts/run_peewee_tests.py -e sqlite --strict --json strict-sqlite.json | tail -40
       - name: mysql strict (coverage report)
         run: .venv/bin/python scripts/run_peewee_tests.py -e mysql --strict --json strict-mysql.json | tail -40
+      - name: postgres / psycopg2 strict (coverage report)
+        run: .venv/bin/python scripts/run_peewee_tests.py -e postgres --strict --json strict-postgres.json | tail -40
+      - name: postgres / psycopg3 strict (coverage report)
+        run: .venv/bin/python scripts/run_peewee_tests.py -e psycopg3 --strict --json strict-psycopg3.json | tail -40
       - name: strict pass rate to job summary
         run: |
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
           print("| engine | strict pass rate | pass | unsupported | fail | error |")
           print("|---|---|---|---|---|---|")
-          for e in ("sqlite", "mysql"):
+          for e in ("sqlite", "mysql", "postgres", "psycopg3"):
               d = json.load(open(f"strict-{e}.json")); c = d["counts"]
               print(f"| {e} | {d['pass_rate']:.1%} | {c['pass']} | {c['unsupported']} | {c['fail']} | {c['error']} |")
           PY

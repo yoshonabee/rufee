@@ -1,5 +1,12 @@
 # rufee
 
+[![PyPI](https://img.shields.io/pypi/v/rufee)](https://pypi.org/project/rufee/)
+[![Python](https://img.shields.io/pypi/pyversions/rufee)](https://pypi.org/project/rufee/)
+[![peewee](https://img.shields.io/badge/peewee-4.5.x-blue)](https://github.com/coleifer/peewee)
+[![CI](https://img.shields.io/github/actions/workflow/status/yoshonabee/rufee/ci.yml?branch=main&label=build)](https://github.com/yoshonabee/rufee/actions/workflows/ci.yml?query=branch%3Amain)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fyoshonabee%2Frufee%2Fbadges%2Fcoverage.json)](https://github.com/yoshonabee/rufee/actions/workflows/coverage.yml?query=branch%3Amain)
+[![License](https://img.shields.io/pypi/l/rufee)](LICENSE)
+
 A drop-in replacement for [peewee](https://github.com/coleifer/peewee)'s SQL
 rendering `Context`, implemented in Rust.
 

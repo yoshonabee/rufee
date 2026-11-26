@@ -59,6 +59,7 @@ classes! {
     noop_model_select = "peewee"::"NoopModelSelect",
     model_select = "peewee"::"ModelSelect",
     select_query = "peewee"::"SelectQuery",
+    select_base = "peewee"::"SelectBase",
     compound_select_query = "peewee"::"CompoundSelectQuery",
     update = "peewee"::"Update",
     insert = "peewee"::"Insert",
@@ -106,3 +107,4 @@ pub const SCOPE_COLUMN: u8 = 16;
 pub const CSQ_PARENTHESES_NEVER: i64 = 0;
 pub const CSQ_PARENTHESES_ALWAYS: i64 = 1;
 pub const CSQ_PARENTHESES_UNNESTED: i64 = 2;
+pub const CSQ_PARENTHESES_GROUPED: i64 = 3;

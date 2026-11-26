@@ -432,23 +432,35 @@ impl<'py> Ctx<'py> {
 
     /// `ctx.sql(Entity(*path))` without building the Python node.
     pub fn entity(&mut self, path: &[&str]) -> PyResult<()> {
-        let (open, close) = self.dialect.quote;
         let mut first = true;
         for part in path.iter().filter(|p| !p.is_empty()) {
             if !first {
                 self.sql.push('.');
             }
             first = false;
-            self.sql.push(open);
-            // Entity.__init__ escapes embedded double quotes.
-            if part.contains('"') {
-                self.sql.push_str(&part.replace('"', "\"\""));
-            } else {
-                self.sql.push_str(part);
-            }
-            self.sql.push(close);
+            self.quoted_part(part);
         }
         Ok(())
+    }
+
+    /// One quoted `Entity` path part. `Entity.__sql__` escapes the opening
+    /// quote character by replacing it with both quote characters
+    /// (`p.replace(q, quote_chars)`), then wraps the part in them.
+    #[inline]
+    pub fn quoted_part(&mut self, part: &str) {
+        let (open, close) = self.dialect.quote;
+        self.sql.push(open);
+        if part.contains(open) {
+            let mut both = String::with_capacity(open.len_utf8() + close.len_utf8());
+            both.push(open);
+            both.push(close);
+            let mut buf = [0u8; 4];
+            self.sql
+                .push_str(&part.replace(&*open.encode_utf8(&mut buf), &both));
+        } else {
+            self.sql.push_str(part);
+        }
+        self.sql.push(close);
     }
 
     /// Write the parameter placeholder (`ctx.state.param or '?'`).
@@ -549,14 +561,17 @@ fn query_val_transform(v: &Bound<'_, PyAny>, c: &Classes) -> PyResult<String> {
         || isa(v, &c.date)?
         || isa(v, &c.time)?
     {
-        return Ok(format!("'{}'", v.str()?.to_str()?));
+        return Ok(format!("'{}'", v.str()?.to_str()?.replace('\'', "''")));
     }
     if v.is_instance_of::<pyo3::types::PyBytes>() {
         let decoded = match v.call_method1("decode", ("utf8",)) {
             Ok(s) => s,
             Err(_) => v.call_method1("decode", ("raw_unicode_escape",))?,
         };
-        return Ok(format!("'{}'", decoded.str()?.to_str()?));
+        return Ok(format!(
+            "'{}'",
+            decoded.str()?.to_str()?.replace('\'', "''")
+        ));
     }
     if v.is_instance_of::<pyo3::types::PyInt>() {
         // int('%s' % int(v)) also maps bool -> 0/1

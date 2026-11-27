@@ -6,6 +6,9 @@ import logging
 import os
 import sys
 import threading
+from collections import deque
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 import warnings
 from dataclasses import dataclass, field
 
@@ -133,6 +136,98 @@ def _reference_render(query, scope, parentheses, settings):
     return ctx.sql(query).query()
 
 
+def _materialize_insert_rows(query) -> None:
+    """Turn one-shot insert rows into a list before shadow mode renders twice.
+
+    ``insert_many(generator)``, ``insert_many(zip(...), fields=...)`` and
+    ``Model.bulk_create`` (which builds its rows with a generator) hand the
+    query an iterator. The first render consumes it, so the second one, whose
+    result is the one executed, would see no rows: peewee then raises "no rows
+    to insert" or writes nothing. A list renders the same and survives both.
+    """
+    rows = getattr(query, "_insert", None)
+    if isinstance(rows, Iterator):
+        query._insert = list(rows)
+
+
+class _DefaultReplay:
+    """Make both shadow renders of an insert see the same callable defaults.
+
+    peewee and the Rust renderer both fill a column missing from an insert row
+    with ``query.get_default_data()[column]``, calling it when it is callable
+    (``uuid4``, ``datetime.now``, an id generator). Shadow mode renders twice,
+    so each call would produce a different value and every such insert would
+    report a params mismatch. This records the values returned during the Rust
+    render and hands the same values, in the same order per column, to the
+    reference render.
+
+    The override is an attribute on the query instance, not a change to
+    ``model._meta.defaults``, which every thread inserting into the table
+    shares. Both renderers look ``get_default_data`` up on the instance.
+    """
+
+    _MISSING = object()
+
+    def __init__(self, query):
+        self.query = query
+        self.active = False
+        get_default_data = getattr(query, "get_default_data", None)
+        if get_default_data is None:
+            return
+        defaults = get_default_data()
+        if not defaults or not any(isinstance(v, Callable) for v in defaults.values()):
+            return
+        self.active = True
+        self.recording = {}
+        self.replaying = {}
+        for column, value in defaults.items():
+            if isinstance(value, Callable):
+                queue = deque()
+                self.recording[column] = self._recorder(value, queue)
+                self.replaying[column] = self._replayer(value, queue)
+            else:
+                self.recording[column] = self.replaying[column] = value
+
+    @staticmethod
+    def _recorder(default, queue):
+        def record():
+            value = default()
+            queue.append(value)
+            return value
+        return record
+
+    @staticmethod
+    def _replayer(default, queue):
+        # An empty queue means the reference render needs more defaults than
+        # the Rust render used. A fresh value then makes the params differ, so
+        # the disagreement still shows up as a mismatch.
+        def replay():
+            return queue.popleft() if queue else default()
+        return replay
+
+    @contextmanager
+    def _serving(self, defaults):
+        if not self.active:
+            yield
+            return
+        query = self.query
+        previous = query.__dict__.get("get_default_data", self._MISSING)
+        query.get_default_data = lambda: defaults
+        try:
+            yield
+        finally:
+            if previous is self._MISSING:
+                del query.get_default_data
+            else:
+                query.get_default_data = previous
+
+    def record(self):
+        return self._serving(self.recording if self.active else None)
+
+    def replay(self):
+        return self._serving(self.replaying if self.active else None)
+
+
 # Frames skipped when looking for the code that ran the query: peewee is a
 # single module (peewee.py), playhouse and rufee are packages.
 _INTERNAL_FILES = frozenset({os.path.abspath(peewee.__file__)})
@@ -240,8 +335,16 @@ class Context(_PeeweeContext):
     def _render_query(self, query):
         state = self.state
         settings = state.settings
+        replay = None
+        if _config.mode == MODE_SHADOW:
+            _materialize_insert_rows(query)
+            replay = _DefaultReplay(query)
         try:
-            result = _native.render(query, state.scope, state.parentheses, settings)
+            if replay is None:
+                result = _native.render(query, state.scope, state.parentheses, settings)
+            else:
+                with replay.record():
+                    result = _native.render(query, state.scope, state.parentheses, settings)
         except Unsupported as exc:
             return self._fallback(query, exc)
         except Exception as exc:  # noqa: BLE001 - any Rust-side failure is a fallback
@@ -261,8 +364,9 @@ class Context(_PeeweeContext):
             }})
             return self
 
-        if _config.mode == MODE_SHADOW:
-            ref = _reference_render(query, state.scope, state.parentheses, settings)
+        if replay is not None:
+            with replay.replay():
+                ref = _reference_render(query, state.scope, state.parentheses, settings)
             stats._bump("shadow")
             if (result[0], list(result[1])) != (ref[0], list(ref[1])):
                 stats._bump("mismatch")

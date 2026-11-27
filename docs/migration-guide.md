@@ -188,6 +188,26 @@ wall-clock time.
 Turn it on everywhere queries are built, not only in the web tier: batch jobs,
 background workers and admin tools tend to build the unusual shapes.
 
+### Inserts in shadow mode
+
+Rendering a query twice matters for inserts in two ways, and rufee handles
+both so that the executed result is what plain peewee would have produced:
+
+- **One-shot rows.** `insert_many(generator)`, `insert_many(zip(...),
+  fields=...)` and `Model.bulk_create` (which builds its rows with a generator)
+  give the query an iterator that only one render could consume. In shadow
+  mode rufee turns those rows into a list first; `rust` mode leaves them alone.
+- **Callable defaults.** A column missing from an insert row is filled from its
+  default; a callable default (`uuid4`, `datetime.now`, an id generator) would
+  return a different value per render and show up as a params mismatch. rufee
+  records the values the Rust render got and gives the same ones to peewee's
+  render, so each default still runs once per row.
+
+**Use a rufee release newer than 0.2.1 for shadow mode.** In 0.2.1 and earlier, shadow
+mode broke inserts with one-shot rows (peewee raised "no rows to insert", or
+nothing was written) and reported every insert with a callable default as a
+mismatch. `rust` mode was not affected.
+
 **Done when**, over a period that covers your whole traffic cycle (a week is a
 reasonable default: it covers weekly jobs; include a month boundary if you have
 monthly jobs):

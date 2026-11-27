@@ -7,7 +7,7 @@ import os
 import sys
 import threading
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 import warnings
 from dataclasses import dataclass, field
@@ -134,6 +134,20 @@ def _reference_render(query, scope, parentheses, settings):
     ctx = _PeeweeContext(**settings)
     ctx.state = _PeeweeState(scope, parentheses, dict(settings))
     return ctx.sql(query).query()
+
+
+def _materialize_insert_rows(query) -> None:
+    """Turn one-shot insert rows into a list before shadow mode renders twice.
+
+    ``insert_many(generator)``, ``insert_many(zip(...), fields=...)`` and
+    ``Model.bulk_create`` (which builds its rows with a generator) hand the
+    query an iterator. The first render consumes it, so the second one, whose
+    result is the one executed, would see no rows: peewee then raises "no rows
+    to insert" or writes nothing. A list renders the same and survives both.
+    """
+    rows = getattr(query, "_insert", None)
+    if isinstance(rows, Iterator):
+        query._insert = list(rows)
 
 
 class _DefaultReplay:
@@ -321,7 +335,10 @@ class Context(_PeeweeContext):
     def _render_query(self, query):
         state = self.state
         settings = state.settings
-        replay = _DefaultReplay(query) if _config.mode == MODE_SHADOW else None
+        replay = None
+        if _config.mode == MODE_SHADOW:
+            _materialize_insert_rows(query)
+            replay = _DefaultReplay(query)
         try:
             if replay is None:
                 result = _native.render(query, state.scope, state.parentheses, settings)

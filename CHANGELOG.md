@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Fix (shadow mode): inserts with one-shot rows were lost.**
+  `insert_many(generator)`, `insert_many(zip(...), fields=...)` and
+  `Model.bulk_create` hand the query an iterator; the Rust render consumed it
+  and the executed peewee render saw no rows, so peewee raised "no rows to
+  insert" or wrote nothing. Shadow mode now turns such rows into a list before
+  rendering. `rust` mode was not affected and is unchanged.
+- **Fix (shadow mode): callable insert defaults reported as mismatches.** Each
+  render called the default (`uuid4`, `datetime.now`, ...) again and got a
+  different value. The Rust render now records the values and the reference
+  render replays them, per column, through an override on the query instance
+  (never on the shared `model._meta.defaults`). Each default runs once per row,
+  as without rufee.
+- Running peewee's whole sqlite suite in forced shadow mode now passes 100%
+  with no mismatches (was 12 failures and 2 mismatches).
 - Postgres is a tested backend: peewee's suite runs on Postgres 17 through
   psycopg2 and psycopg 3 in CI, strict 100%.
 - `playhouse.postgres_ext` renders in Rust: `JsonLookup` (`data['a']['b']`),

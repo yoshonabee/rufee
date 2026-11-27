@@ -489,3 +489,55 @@ def test_shadow_replay_is_per_query_across_threads(db, Event):
     assert errors == []
     assert rufee.stats.shadow == 800
     assert rufee.stats.mismatch == 0
+
+
+# --- shadow mode and one-shot insert rows ------------------------------------
+
+
+@pytest.mark.parametrize("rows", [
+    pytest.param(lambda: ({"name": f"g{i}", "qty": i} for i in range(3)), id="generator"),
+    pytest.param(lambda: iter([{"name": "i0", "qty": 0}, {"name": "i1", "qty": 1}]), id="iter"),
+    pytest.param(lambda: map(lambda i: {"name": f"m{i}", "qty": i}, range(2)), id="map"),
+])
+@pytest.mark.parametrize("mode", ["rust", "shadow"])
+def test_insert_many_with_iterator_rows_writes_every_row(db, Item, rows, mode):
+    rufee.configure(mode=mode)
+    db.connect()
+    db.create_tables([Item])
+    expected = [r["name"] for r in rows()]
+    Item.insert_many(rows()).execute()
+    assert sorted(i.name for i in Item.select()) == sorted(expected)
+    assert rufee.stats.mismatch == 0
+
+
+@pytest.mark.parametrize("mode", ["rust", "shadow"])
+def test_insert_many_zip_rows_with_fields(db, Item, mode):
+    rufee.configure(mode=mode)
+    db.connect()
+    db.create_tables([Item])
+    Item.insert_many(zip(["x", "y"], [1, 2]), fields=[Item.name, Item.qty]).execute()
+    assert sorted((i.name, i.qty) for i in Item.select()) == [("x", 1), ("y", 2)]
+
+
+@pytest.mark.parametrize("mode", ["rust", "shadow"])
+def test_bulk_create(db, Item, mode):
+    rufee.configure(mode=mode)
+    db.connect()
+    db.create_tables([Item])
+    Item.bulk_create([Item(name="a", qty=1), Item(name="b", qty=2)])
+    assert sorted(i.name for i in Item.select()) == ["a", "b"]
+    assert rufee.stats.mismatch == 0
+
+
+def test_rust_mode_leaves_iterator_rows_alone(db, Item, monkeypatch):
+    # Only shadow renders twice; rust mode must not pay for a list copy.
+    seen = {}
+    real_render = _context._native.render
+
+    def spy(query, *args):
+        seen["rows"] = query._insert
+        return real_render(query, *args)
+
+    monkeypatch.setattr(_context._native, "render", spy)
+    db.get_sql_context().sql(Item.insert_many({"name": "a", "qty": 1} for _ in range(1))).query()
+    assert not isinstance(seen["rows"], list)
